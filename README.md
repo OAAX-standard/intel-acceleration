@@ -1,16 +1,32 @@
 # intel-acceleration
 
-This folder contains the source code of the shared library and the Docker image that can be used by AI application developers to benefit from the acceleration offered by Intel CPU & NPU on x86_64 machines.
+This folder contains the source code of the shared library and the Docker image that can be used by AI application developers to benefit from the acceleration offered by Intel CPU, GPU and NPU on x86_64 machines.
 
-## Artifacts
+## Repository structure
 
-- The OAAX runtime is available as a shared library that can be used by developers to load and run optimized models on an Intel CPU & NPU.
+The repository is structured as follows:
 
-## Usage
+- [Conversion toolchain](conversion-toolchain): Contains the source code for building the OAAX conversion toolchain.
+- [Runtime library](runtime-library): Contains the source code for building the OAAX runtime.
 
-### Using the runtime library
+Each folder contains a README file that provides more details about the different parts of the implementation.
 
-To use the runtime library, you need to have the Hailo driver installed on the X86_64 machine.
+## Building the implementation
 
-The OpenVINO OAAX runtime can be used just like the other OAAX runtimes. You can find various and diverse usage examples in
-the [examples](https://github.com/oaax-standard/examples) repository.
+You can build the conversion toolchain and the runtime separately by calling the (Shell) build scripts in each folder.
+That will create an `artifacts/` directory in each folder containing the compiled binaries: a compressed Docker image and shared libraries (for X86_64 target machines) respectively.
+
+## Pre-built OAAX artifacts
+
+If you're interested in using the OAAX toolchain and runtime without building them, you can find them in the
+[contributions](https://github.com/oaax-standard/contributions) repository.   
+Additionally, you can find a diverse set of examples and applications of using the OAAX runtime in the 
+[examples](https://github.com/oaax-standard/examples) repository.
+
+## Contributing
+
+If you're interested in contributing to the OAAX reference implementation, please check out the [CONTRIBUTING.md](CONTRIBUTING.md) file for more information on how to get started.
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for more details.
