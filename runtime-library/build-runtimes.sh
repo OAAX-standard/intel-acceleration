@@ -11,7 +11,7 @@ mkdir -p $ARTIFACTS_DIR
 cd ${BUILD_DIR}
 
 rm -rf *
-cmake ..
+cmake .. -DPLATFORM=X86_64
 make -j
 echo "Build complete. The following shared libraries were created:"
 ls ./*.so
