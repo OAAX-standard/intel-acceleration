@@ -236,25 +236,40 @@ if (MSVC)
     absl_time_zone
     absl_utf8_for_code_point
     absl_vlog_config_internal
+    clog
+    cpuinfo
+    # custom_op_get_const_input_test_library.dll
     custom_op_get_const_input_test_library
+    # custom_op_invalid_library.dll
     custom_op_invalid_library
+    # custom_op_library.dll
     custom_op_library
+    # custom_op_local_function.dll
     custom_op_local_function
+    # custom_op_openvino_wrapper_library.dll
+    custom_op_openvino_wrapper_library
     flatbuffers
     gmock
+    gmock_main
     gtest
-    libprotobuf-lite
+    gtest_main
     libprotobuf
     libprotoc
     onnx
+    # onnxruntime.dll
+    onnxruntime
     onnxruntime_common
     onnxruntime_flatbuffers
     onnxruntime_framework
     onnxruntime_graph
     onnxruntime_lora
     onnxruntime_mlas
+    onnxruntime_mocked_allocator
     onnxruntime_optimizer
     onnxruntime_providers
+    # onnxruntime_providers_openvino.dll
+    onnxruntime_providers_openvino
+    # onnxruntime_providers_shared.dll
     onnxruntime_providers_shared
     onnxruntime_session
     onnxruntime_test_utils
@@ -262,11 +277,20 @@ if (MSVC)
     onnx_proto
     onnx_test_data_proto
     onnx_test_runner_common
+    re2
+    # test_execution_provider.dll
     test_execution_provider
     win_getopt_wide
 
-    cpuinfo re2 c_utilities
+    c_utilities
     ws2_32 bcrypt
+  )
+  # copy shared libraries to binary directory
+  file(GLOB ONNXRUNTIME_DLLS "${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/*.dll")
+  add_custom_command(TARGET RuntimeLibrary POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${ONNXRUNTIME_DLLS}
+      "$<TARGET_FILE_DIR:RuntimeLibrary>/"
   )
 else()
   target_link_libraries(RuntimeLibrary PUBLIC

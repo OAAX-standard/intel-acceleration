@@ -158,7 +158,7 @@ int runtime_initialization()
     log_info(logger, "Initializing the runtime environment...");
 
     // get the correct api version
-    api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+    api = OrtGetApiBase()->GetApi(17); // TODO: figure out why ORT_API_VERSION doesn't work for windows build
 
     // Allocate memory for the objects
     session_ids = (int *)malloc(sizeof(int) * n_duplicates);
