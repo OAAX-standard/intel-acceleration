@@ -131,12 +131,10 @@ int runtime_initialization_with_args(int length, const char **keys, const void *
     if (device_type == NULL)
     {
         device_type = strdup("CPU");
-        printf("No device type specified, defaulting to 'CPU'\n");
     }
     if (precision == NULL)
     {
         precision = strdup("FP32");
-        printf("No precision specified, defaulting to 'FP32'\n");
     }
 
     // Initialize the logger
