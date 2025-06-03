@@ -2,72 +2,59 @@ cmake_minimum_required(VERSION 3.10.2)
 
 project(RuntimeLibrary)
 
-# where is the nx-c source code located?
+# Enable verbose makefile output (set to OFF for less output)
+set(CMAKE_VERBOSE_MAKEFILE OFF)
+
+# === Directory Structure ===
+# Define key source, include, and dependency directories
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(DEPS_DIR ${CMAKE_CURRENT_LIST_DIR}/deps)
+set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
+set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
+set(ONNX_RUNTIME_DIR "${DEPS_DIR}/onnxruntime")
 
-# Specify
-set(OPENVINO_VERSION "1.21.0")
-message("OPENVINO_VERSION: ${OPENVINO_VERSION}")
-######################### customize when cross-compiling ###############################################################
 
-# set COMPILER_PREFIX, for example, "" for default compiler, arm-linux- , or aarch64-linux- etc for cross compilers
-# set generic build target
-set(GENERIC_BUILD_TARGET X86_64)
-set(CROSS_ROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0")
-set(COMPILER_PREFIX "x86_64-unknown-linux-gnu-")
-set(SYSROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0/x86_64-unknown-linux-gnu/sysroot")
-set(CMAKE_BUILD_FLAGS " -fno-math-errno -fopenmp -std=c99 -march=haswell")
+# === Platform Selection and Toolchain Setup ===
+# Select platform and set cross-compilation toolchain variables
+if(WIN32)
+  set(PLATFORM WINDOWS)
+endif()
 
-set(CMAKE_C_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
-set(CMAKE_CXX_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}g++)
-set(CMAKE_LINKER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ld)
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+if(NOT DEFINED PLATFORM)
+  message(FATAL_ERROR "Please specify the target platform: -DPLATFORM=X86_64 or use -DPLATFORM=WINDOWS.")
+endif()
 
-#--build: the machine you are building on
-#--host: the machine you are building for
-#--target: the machine that GCC will produce binary for
-set(BUILD X86_64-linux-gnu)
-set(HOST ${GENERIC_BUILD_TARGET}-linux)
-set(TARGET ${GENERIC_BUILD_TARGET})
+if (PLATFORM STREQUAL "X86_64")
+  set(GENERIC_BUILD_TARGET X86_64-1.21.0)
+  set(CROSS_ROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0")
+  set(COMPILER_PREFIX "x86_64-unknown-linux-gnu-")
+  set(SYSROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0/x86_64-unknown-linux-gnu/sysroot")
+  # -fno-math-errno: Avoid setting errno after math functions (improves performance).
+  # -fopenmp: Enable OpenMP for parallel programming.
+  # -std=c99: Use the C99 standard for C code.
+  # -march=haswell: Optimize code for Intel Haswell CPUs.
+  set(CMAKE_BUILD_FLAGS "-fno-math-errno -fopenmp -march=haswell")
+elseif (PLATFORM STREQUAL "WINDOWS")
+  set(GENERIC_BUILD_TARGET X86_64_WINDOWS-1.21.0)
+  set(CMAKE_SYSTEM_NAME Windows)
+  # Use default MSVC toolchain, do not set cross-compilation variables
+  set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} /W3 /MD /D_CRT_SECURE_NO_WARNINGS")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /MD /D_CRT_SECURE_NO_WARNINGS")
+  # Do not add compiler flags to CMAKE_BUILD_FLAGS to avoid linker warnings
+else()
+  message(FATAL_ERROR "Please specify the target platform: X86_64, AARCH64, or WINDOWS. Found ${PLATFORM}")
+endif()
 
-######################### webassembly wamr settings ####################################################################
-
-# set make system
-set(CMAKE_SYSTEM_NAME Linux)
-
-######################## webassembly wamr library build ################################################################
-
-# Reset default linker flags
-set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS " ")
-set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS " ")
-
-# compiling and linking flags
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
-
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wformat -Wformat-security -fdata-sections -ffunction-sections -Wl,--gc-sections")
-
-####################### toolchain arguments ############################################################################
-
-INCLUDE(CMakeForceCompiler)
-
-set(CMAKE_VERBOSE_MAKEFILE ON)
-
-set(CMAKE_BUILD_FLAGS " ${CMAKE_BUILD_FLAGS} -std=c99 -fno-common -Wall -Wextra")
-set(CMAKE_BUILD_FLAGS " ${CMAKE_BUILD_FLAGS} -Wno-missing-field-initializers -fno-exceptions")
-set(CMAKE_BUILD_FLAGS " ${CMAKE_BUILD_FLAGS} -Wno-attribute-warning -fdata-sections -ffunction-sections -Wl,--gc-sections ")
-
-set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-
+# Print toolchain and sysroot info for debugging
 message(STATUS "SDKTARGETSYSROOT=${SDKTARGETSYSROOT}")
 message(STATUS "CROSS_ROOT=${CROSS_ROOT}")
 
+# Set the root path for finding libraries and headers on the target
+set(CMAKE_FIND_ROOT_PATH ${SDKTARGETSYSROOT})
+
+# Set CMake toolchain variables for cross-compilation
+set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_AR ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ar)
 set(CMAKE_AS ${CROSS_ROOT}/bin/${COMPILER_PREFIX}as)
 set(CMAKE_LD ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ld)
@@ -76,68 +63,238 @@ set(CMAKE_C_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
 set(CMAKE_CXX_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}g++)
 set(CMAKE_ASM_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
 set(CMAKE_NM ${CROSS_ROOT}/bin/${COMPILER_PREFIX}NM)
-
-# this is the file system root of the target
-set(CMAKE_FIND_ROOT_PATH ${SDKTARGETSYSROOT})
-
-# search for programs in the build host directories
+# Do not use the root path when searching for programs (executables)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-
-# for libraries and headers in the target directories
+# Only search the root path when searching for libraries
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+# Only search the root path when searching for header files
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+# Only search the root path when searching for packages (e.g., via find_package)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
-######################## generic build settings ########################################################################
+# Reset default linker flags for shared libraries
+set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS " ")
+set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS " ")
 
-# set some basic c, c++ and linker flags
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS}")
+# Add common warning and optimization flags for C and C++
+if(NOT MSVC)
+  set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -std=c99 -fno-common -Wall -Wextra -Wformat -Wformat-security")
+  set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -Wno-missing-field-initializers -Wno-attribute-warning")
+  set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -fdata-sections -ffunction-sections -Wl,--gc-sections -fno-exceptions")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wformat -Wformat-security -fdata-sections -ffunction-sections -Wl,--gc-sections")
+  set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
+  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
+  set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS}  -D_GNU_SOURCE -I${CROSS_ROOT}/include")
+endif()
+
+# === Generic Build Settings ===
+# Set basic C, C++, and linker flags
 set(LINKER_FLAGS "${LINKER_FLAGS} ${CMAKE_BUILD_FLAGS}")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_BUILD_FLAGS}")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_BUILD_FLAGS}")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_BUILD_FLAGS}")
 
-add_definitions(-DOPENVINO_VERSION=${OPENVINO_VERSION})
+# Linker flag to error on undefined symbols when building shared libraries
+# set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--no-undefined")
 
-# add all source files
+# === Source Files ===
+# Add all source files for the runtime library
 file(GLOB_RECURSE SRC
         ${SRC_DIR}/runtime_utils.c
         ${SRC_DIR}/runtime_core.c
-        ${DEPS_DIR}/utils/queue.c
-        ${DEPS_DIR}/utils/logger.c
 )
 ######################## main bin build settings #######################################################################
 
-# binary target
+# === Library Target ===
+# Create the shared library target for the runtime
 add_library(RuntimeLibrary SHARED ${SRC})
 
-if("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
-        target_compile_options(RuntimeLibrary PUBLIC
-                -Ofast -s
-        )
+# Add optimization and debug flags for Release builds
+if (MSVC)
+  if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
+    target_compile_options(RuntimeLibrary PUBLIC /O2 /DNDEBUG)
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    target_compile_options(RuntimeLibrary PUBLIC /Od /Zi /DDEBUG)
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
+    target_compile_options(RuntimeLibrary PUBLIC /O2 /Zi)
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
+    target_compile_options(RuntimeLibrary PUBLIC /O1)
+  endif()
+else()
+  if ("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
+    target_compile_options(RuntimeLibrary PUBLIC
+      -Ofast # Enable aggressive optimizations for speed (may break strict standards compliance)
+      -s     # Strip all symbol information from the output binary (reduces size)
+      -g     # Generate debug information (minimal, for backtraces)
+    )
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    target_compile_options(RuntimeLibrary PUBLIC
+      -O0    # No optimization (easier debugging)
+      -g3    # Generate maximum debug information
+    )
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "RelWithDebInfo")
+    target_compile_options(RuntimeLibrary PUBLIC
+      -O2    # Optimize for speed, but less aggressively than -Ofast
+      -g     # Generate debug information
+    )
+  elseif("${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
+    target_compile_options(RuntimeLibrary PUBLIC
+      -Os    # Optimize for minimum binary size
+      -g     # Generate debug information
+    )
+  endif()
 endif()
 
-# debugging on/off RuntimeLibrary
-if(NX_DEBUG)
-        target_compile_definitions(RuntimeLibrary PRIVATE NX_DEBUG_PRINT)
-endif()
+# === Include Directories ===
+# Specify public include paths for consumers
+target_include_directories(RuntimeLibrary PUBLIC
+  ${INCLUDE_DIR}
+  ${TOOLS_C_UTILITIES_INCLUDE_DIR}
+  ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/include
+  ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/include/onnxruntime/core/session
+)
 
-# target include / link dirs
-target_include_directories(RuntimeLibrary PUBLIC ${INCLUDE_DIR})
-target_include_directories(RuntimeLibrary PUBLIC ${DEPS_DIR}/utils)
+# === Link Directories ===
+# Specify library search paths for dependencies
+target_link_directories(RuntimeLibrary PUBLIC
+  "${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}"
+)
 
-set(RE2_DIR "${DEPS_DIR}/re2")
-set(ONNX_RUNTIME_DIR "${DEPS_DIR}/onnxruntime")
-set(CPUINFO_DIR "${DEPS_DIR}/cpuinfo")
+# === Link to c-utilities ===
+# Add the c-utilities subdirectory for building and linking
+add_subdirectory(${TOOLS_C_UTILITIES_DIR} ${CMAKE_CURRENT_BINARY_DIR}/c_utilities)
 
-target_include_directories(RuntimeLibrary PUBLIC ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}-${OPENVINO_VERSION}/include)
-target_include_directories(RuntimeLibrary PUBLIC ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}-${OPENVINO_VERSION}/include/onnxruntime/core/session)
-target_link_directories(RuntimeLibrary PUBLIC ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}-${OPENVINO_VERSION})
-target_link_libraries(
-        RuntimeLibrary
-        PUBLIC
-        -Wl,--start-group
-        
+# === Link Libraries ===
+# Link all required libraries and group them for the linker
+if (MSVC)
+  target_link_libraries(RuntimeLibrary PUBLIC
+    absl_bad_any_cast_impl
+    absl_bad_optional_access
+    absl_bad_variant_access
+    absl_base
+    absl_city
+    absl_civil_time
+    absl_cord
+    absl_cordz_functions
+    absl_cordz_handle
+    absl_cordz_info
+    absl_cord_internal
+    absl_crc32c
+    absl_crc_cord_state
+    absl_crc_cpu_detect
+    absl_crc_internal
+    absl_debugging_internal
+    absl_decode_rust_punycode
+    absl_demangle_internal
+    absl_demangle_rust
+    absl_examine_stack
+    absl_exponential_biased
+    absl_failure_signal_handler
+    absl_flags_commandlineflag
+    absl_flags_commandlineflag_internal
+    absl_flags_config
+    absl_flags_internal
+    absl_flags_marshalling
+    absl_flags_parse
+    absl_flags_private_handle_accessor
+    absl_flags_program_name
+    absl_flags_reflection
+    absl_flags_usage
+    absl_flags_usage_internal
+    absl_graphcycles_internal
+    absl_hash
+    absl_hashtablez_sampler
+    absl_int128
+    absl_kernel_timeout_internal
+    absl_log_entry
+    absl_log_globals
+    absl_log_internal_check_op
+    absl_log_internal_conditions
+    absl_log_internal_fnmatch
+    absl_log_internal_format
+    absl_log_internal_globals
+    absl_log_internal_log_sink_set
+    absl_log_internal_message
+    absl_log_internal_nullguard
+    absl_log_internal_proto
+    absl_log_severity
+    absl_log_sink
+    absl_low_level_hash
+    absl_malloc_internal
+    absl_raw_hash_set
+    absl_raw_logging_internal
+    absl_spinlock_wait
+    absl_stacktrace
+    absl_strerror
+    absl_strings
+    absl_strings_internal
+    absl_string_view
+    absl_str_format_internal
+    absl_symbolize
+    absl_synchronization
+    absl_throw_delegate
+    absl_time
+    absl_time_zone
+    absl_utf8_for_code_point
+    absl_vlog_config_internal
+    clog
+    cpuinfo
+    # custom_op_get_const_input_test_library.dll
+    custom_op_get_const_input_test_library
+    # custom_op_invalid_library.dll
+    custom_op_invalid_library
+    # custom_op_library.dll
+    custom_op_library
+    # custom_op_local_function.dll
+    custom_op_local_function
+    # custom_op_openvino_wrapper_library.dll
+    custom_op_openvino_wrapper_library
+    flatbuffers
+    gmock
+    gmock_main
+    gtest
+    gtest_main
+    libprotobuf
+    libprotoc
+    onnx
+    # onnxruntime.dll
+    onnxruntime
+    onnxruntime_common
+    onnxruntime_flatbuffers
+    onnxruntime_framework
+    onnxruntime_graph
+    onnxruntime_lora
+    onnxruntime_mlas
+    onnxruntime_mocked_allocator
+    onnxruntime_optimizer
+    onnxruntime_providers
+    # onnxruntime_providers_openvino.dll
+    onnxruntime_providers_openvino
+    # onnxruntime_providers_shared.dll
+    onnxruntime_providers_shared
+    onnxruntime_session
+    onnxruntime_test_utils
+    onnxruntime_util
+    onnx_proto
+    onnx_test_data_proto
+    onnx_test_runner_common
+    re2
+    # test_execution_provider.dll
+    test_execution_provider
+    win_getopt_wide
+
+    c_utilities
+    ws2_32 bcrypt
+  )
+  # copy shared libraries to binary directory
+  file(GLOB ONNXRUNTIME_DLLS "${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/*.dll")
+  add_custom_command(TARGET RuntimeLibrary POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${ONNXRUNTIME_DLLS}
+      "$<TARGET_FILE_DIR:RuntimeLibrary>/"
+  )
+else()
+  target_link_libraries(RuntimeLibrary PUBLIC
+    -Wl,--start-group
         absl_bad_optional_access
         absl_bad_variant_access
         absl_base
@@ -215,31 +372,16 @@ target_link_libraries(
         onnxruntime_mlas
         onnxruntime_optimizer
         onnxruntime_providers
-        # onnxruntime_providers_openvino.so
-        # onnxruntime_providers_shared.so
         onnxruntime_session
-        # onnxruntime.so
         onnxruntime_util
-        # openvino_c.so.2500
-        # openvino_intel_cpu_plugin.so
-        # openvino_intel_gpu_plugin.so
-        # openvino_intel_npu_plugin.so
-        # openvino_ir_frontend.so.2500
-        # openvino_onnx_frontend.so.2500
-        # openvino.so.2500
         protobuf
         protoc
         re2
-
-        # Finally, generic imports
-        dl
-        m
-        pthread
-        stdc++
+        pthread dl c_utilities stdc++
         -Wl,--end-group
-)
-
-# copy shared libraries to binary directory
-add_custom_command(TARGET RuntimeLibrary POST_BUILD
-        COMMAND cp ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}-${OPENVINO_VERSION}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/
-)
+  )
+        # copy shared libraries to binary directory
+        add_custom_command(TARGET RuntimeLibrary POST_BUILD
+        COMMAND cp ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/
+        )
+endif()

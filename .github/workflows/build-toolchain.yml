@@ -51,4 +51,4 @@ jobs:
 
       - name: Upload Docker image to S3
         run: |
-          bash scripts/upload-to-storage.sh "conversion-toolchain/${{ env.version }}/OpenVINO" conversion-toolchain/artifacts/*.tar
+          s3cmd put "conversion-toolchain/artifacts/oaax-openvino-toolchain.tar" "s3://oaax/conversion-toolchain/${{ env.version }}/OpenVINO/oaax-openvino-toolchain.tar"
