@@ -2,8 +2,8 @@ name: Build OAAX runtime
 
 on:
   push:
-    # branches:
-    #   - main
+    branches:
+      - main
 
 jobs:
   build-runtime-for-ubuntu:

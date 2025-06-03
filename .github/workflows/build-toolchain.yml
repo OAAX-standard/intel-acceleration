@@ -2,8 +2,8 @@ name: Build OAAX conversion toolchain
 
 on:
   push:
-    # branches:
-    #   - main
+    branches:
+      - main
 
 jobs:
   build-toolchain:
