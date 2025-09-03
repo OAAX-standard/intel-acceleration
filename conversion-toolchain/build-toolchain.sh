@@ -14,7 +14,7 @@ rm -rf artifacts 2&> /dev/null || true
 mkdir artifacts
 
 # Build the toolchain as a Docker image
-docker build -t oaax-openvino-toolchain:$VERSION .
+docker build -t oaax-intel-toolchain:$VERSION .
 
 # Save the Docker image as a tarball
-docker save oaax-openvino-toolchain:$VERSION -o ./artifacts/oaax-openvino-toolchain.tar
+docker save oaax-intel-toolchain:$VERSION -o ./artifacts/oaax-intel-toolchain.tar

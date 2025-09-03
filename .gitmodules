@@ -1,3 +1,9 @@
 [submodule "runtime-library/deps/tools"]
 	path = runtime-library/deps/tools
 	url = https://github.com/OAAX-standard/tools
+[submodule "runtime-library/deps/spdlog"]
+	path = runtime-library/deps/spdlog
+	url = https://github.com/gabime/spdlog
+[submodule "runtime-library/deps/concurrentqueue"]
+	path = runtime-library/deps/concurrentqueue
+	url = https://github.com/cameron314/concurrentqueue

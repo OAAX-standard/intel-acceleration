@@ -22,6 +22,24 @@ if exist "%ARTIFACTS_DIR%" rmdir /s /q "%ARTIFACTS_DIR%"
 REM Create a new, empty artifacts directory
 mkdir "%ARTIFACTS_DIR%"
 
+REM Read runtime version from parent directory's VERSION file
+set "ROOT_DIR=%cd%\.."
+set "VERSION_FILE=%ROOT_DIR%\VERSION"
+if not exist "%VERSION_FILE%" (
+	echo VERSION file not found at "%VERSION_FILE%"
+	exit /b 1
+)
+for /f "usebackq delims=" %%A in ("%VERSION_FILE%") do (
+	set "RUNTIME_VERSION=%%A"
+	goto :got_version
+)
+:got_version
+if not defined RUNTIME_VERSION (
+	echo Failed to read runtime version from "%VERSION_FILE%"
+	exit /b 1
+)
+echo Building runtime version: %RUNTIME_VERSION%
+
 REM Change to the build directory and save the previous directory on the stack
 pushd "%BUILD_DIR%"
 
@@ -29,7 +47,7 @@ REM Delete all files in the build directory quietly (ignore errors/output)
 del /q * >nul 2>&1
 
 REM Run CMake to generate build files using the parent directory as the source
-cmake ..
+cmake .. -DRUNTIME_VERSION="%RUNTIME_VERSION%"
 
 REM If CMake failed, exit the script with error
 if errorlevel 1 exit /b 1
@@ -44,7 +62,7 @@ REM Print message about build completion
 echo Build complete. The following shared libraries were created:
 
 REM List all DLL files in the Release directory (bare format)
-dir /b Release\*.dll
+dir /b Release\*
 
 REM Print message about copying DLLs
 echo Copying shared libraries to artifacts directory...
