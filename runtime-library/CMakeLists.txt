@@ -41,6 +41,8 @@ message(STATUS "Runtime version: ${RUNTIME_VERSION}")
 
 if(PLATFORM STREQUAL "X86_64")
   set(GENERIC_BUILD_TARGET X86_64-1.21.0)
+  set(CMAKE_SYSTEM_PROCESSOR x86_64)
+  set(CMAKE_SYSTEM_NAME Linux)
   set(CROSS_ROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0")
   set(COMPILER_PREFIX "x86_64-unknown-linux-gnu-")
   set(SYSROOT "/opt/x86_64-unknown-linux-gnu-gcc-9.5.0/x86_64-unknown-linux-gnu/sysroot")
@@ -52,6 +54,7 @@ if(PLATFORM STREQUAL "X86_64")
   set(CMAKE_BUILD_FLAGS "-fno-math-errno -fopenmp -march=haswell")
 elseif(PLATFORM STREQUAL "WINDOWS")
   set(GENERIC_BUILD_TARGET X86_64_WINDOWS-1.21.0)
+  set(CMAKE_SYSTEM_PROCESSOR x86_64)
   set(CMAKE_SYSTEM_NAME Windows)
 
   # Use default MSVC toolchain, do not set cross-compilation variables
