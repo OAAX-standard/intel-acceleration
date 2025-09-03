@@ -317,5 +317,5 @@ extern "C" const char *runtime_version()
 
 extern "C" const char *runtime_name()
 {
-    return "OAAX CPU Runtime";
+    return "OAAX Intel Runtime";
 }
