@@ -1,0 +1,38 @@
+name: Delete runtimes and toolchain on PR close
+
+permissions:
+  contents: none
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  handle-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install s3cmd and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y s3cmd
+
+      - name: Configure s3cmd
+        run: |
+          cat > ~/.s3cfg <<EOF
+          [default]
+          access_key = ${{ secrets.S3_ACCESS_KEY }}
+          secret_key = ${{ secrets.S3_SECRET_KEY }}
+          bucket_location = us-east-1
+          host_base = ${{ secrets.S3_ENDPOINT_URL }}
+          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
+          use_https = True
+          EOF
+
+      - name: Delete runtimes and toolchain folders from S3
+        run: |
+            version=${{ github.head_ref }}
+            echo "Deleting artifacts for version: ${version}"
+            s3cmd del --recursive "s3://oaax/runtimes/${version}/INTEL/" || echo "Warning: No runtime-library found for version ${version}"
+            s3cmd del --recursive "s3://oaax/conversion-toolchain/${version}/INTEL/" || echo "Warning: No conversion-toolchain found for version ${version}"

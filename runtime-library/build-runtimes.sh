@@ -16,8 +16,8 @@ make -j
 echo "Build complete. The following shared libraries were created:"
 ls ./*.so
 echo "Copying shared libraries to artifacts directory..."
-mkdir -p ${ARTIFACTS_DIR}/X86_64/1.21.0
-cp ./*.so* ${ARTIFACTS_DIR}/X86_64/1.21.0
-cd ${ARTIFACTS_DIR}/X86_64/1.21.0
-tar czf ${ARTIFACTS_DIR}/runtime-library-X86_64-1.21.0.tar.gz ./*
+mkdir -p ${ARTIFACTS_DIR}/X86_64
+cp ./*.so* ${ARTIFACTS_DIR}/X86_64
+cd ${ARTIFACTS_DIR}/X86_64
+tar czf ${ARTIFACTS_DIR}/runtime-library-X86_64.tar.gz ./*
 echo "Shared libraries have been copied to ${ARTIFACTS_DIR}"

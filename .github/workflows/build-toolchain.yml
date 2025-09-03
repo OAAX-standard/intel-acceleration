@@ -1,17 +1,19 @@
 name: Build OAAX conversion toolchain
+permissions:
+  contents: none
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
 jobs:
   build-toolchain:
     timeout-minutes: 10  # Set a timeout of 10 minutes for the job
-    runs-on: self-hosted
-    container:
-      image: ubuntu:22.04  # or any other image
-      options: --volume /var/run/docker.sock:/var/run/docker.sock
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -22,8 +24,11 @@ jobs:
       - name: Install s3cmd
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y s3cmd docker.io
+          sudo apt-get update -y
+          sudo apt-get install -y s3cmd
+
+      - name: Build conversion toolchain image
+        run: bash conversion-toolchain/build-toolchain.sh
 
       - name: Configure s3cmd
         run: |
@@ -37,18 +42,22 @@ jobs:
           use_https = True
           EOF
 
-      - name: Build conversion toolchain image
-        run: bash conversion-toolchain/build-toolchain.sh
-
       - name: Determine version
         run: |
-          if [ -f VERSION ]; then
-            version=$(cat VERSION)
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            if [ -f VERSION ]; then
+              version=$(cat VERSION)
+            else
+              exit 1
+            fi
           else
-            exit 1
+            version=${{ github.head_ref }}
           fi
           echo "version=$version" >> $GITHUB_ENV
 
       - name: Upload Docker image to S3
         run: |
-          s3cmd put "conversion-toolchain/artifacts/oaax-openvino-toolchain.tar" "s3://oaax/conversion-toolchain/${{ env.version }}/OpenVINO/oaax-openvino-toolchain.tar"
+          s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar"
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/latest/INTEL/oaax-intel-toolchain.tar"
+          fi
