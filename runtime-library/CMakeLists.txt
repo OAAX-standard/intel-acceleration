@@ -13,6 +13,7 @@ set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
 set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
 set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
 set(ONNX_RUNTIME_DIR "${DEPS_DIR}/onnxruntime")
+set(WINDOWS_RUNTIME_DIR "${DEPS_DIR}/windows-runtime")
 
 # === Compile spdlog ===
 # Enable position-independent code for shared library compatibility
@@ -63,7 +64,7 @@ elseif(PLATFORM STREQUAL "WINDOWS")
 
 # Do not add compiler flags to CMAKE_BUILD_FLAGS to avoid linker warnings
 else()
-  message(FATAL_ERROR "Please specify the target platform: X86_64, AARCH64, or WINDOWS. Found ${PLATFORM}")
+  message(FATAL_ERROR "Please specify the target platform: X86_64, or WINDOWS. Found ${PLATFORM}")
 endif()
 
 # Print toolchain and sysroot info for debugging
@@ -74,15 +75,16 @@ message(STATUS "CROSS_ROOT=${CROSS_ROOT}")
 set(CMAKE_FIND_ROOT_PATH ${SDKTARGETSYSROOT})
 
 # Set CMake toolchain variables for cross-compilation
-set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_AR ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ar)
-set(CMAKE_AS ${CROSS_ROOT}/bin/${COMPILER_PREFIX}as)
-set(CMAKE_LD ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ld)
-set(CMAKE_RANLIB ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ranlib)
-set(CMAKE_C_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
-set(CMAKE_CXX_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}g++)
-set(CMAKE_ASM_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
-set(CMAKE_NM ${CROSS_ROOT}/bin/${COMPILER_PREFIX}NM)
+if(NOT WIN32)
+  set(CMAKE_AR ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ar)
+  set(CMAKE_AS ${CROSS_ROOT}/bin/${COMPILER_PREFIX}as)
+  set(CMAKE_LD ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ld)
+  set(CMAKE_RANLIB ${CROSS_ROOT}/bin/${COMPILER_PREFIX}ranlib)
+  set(CMAKE_C_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
+  set(CMAKE_CXX_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}g++)
+  set(CMAKE_ASM_COMPILER ${CROSS_ROOT}/bin/${COMPILER_PREFIX}gcc)
+  set(CMAKE_NM ${CROSS_ROOT}/bin/${COMPILER_PREFIX}NM)
+endif()
 
 # Do not use the root path when searching for programs (executables)
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
@@ -428,4 +430,16 @@ else()
   add_custom_command(TARGET RuntimeLibrary POST_BUILD
     COMMAND cp ${ONNX_RUNTIME_DIR}/${GENERIC_BUILD_TARGET}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/
   )
+endif()
+
+# == Copy Windows runtime libraries == #
+if(MSVC)
+  file(GLOB_RECURSE WIN_RUNTIME_LIBS "${WINDOWS_RUNTIME_DIR}/*")
+
+  foreach(WIN_RUNTIME_LIB ${WIN_RUNTIME_LIBS})
+    add_custom_command(TARGET RuntimeLibrary POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${WIN_RUNTIME_LIB} $<TARGET_FILE_DIR:RuntimeLibrary>
+    )
+  endforeach()
 endif()
