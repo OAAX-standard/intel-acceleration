@@ -144,6 +144,10 @@ file(GLOB_RECURSE SRC
 # Create the shared library target for the runtime
 add_library(RuntimeLibrary SHARED ${SRC})
 
+if(NOT MSVC)
+  target_link_options(RuntimeLibrary PRIVATE "-Wl,-z,noexecstack")
+endif()
+
 # Add optimization and debug flags for Release builds
 if(MSVC)
   if("${CMAKE_BUILD_TYPE}" STREQUAL "Release")
