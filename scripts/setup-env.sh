@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 
 # Install ubuntu packages
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y wget curl build-essential
+apt-get install -y wget curl build-essential execstack
 
 # Define an array of URLs for downloading toolchains
 toolchain_urls=(

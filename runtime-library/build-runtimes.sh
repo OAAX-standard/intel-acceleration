@@ -22,6 +22,7 @@ cmake .. -DPLATFORM=X86_64 -DCMAKE_BUILD_TYPE=Release -DRUNTIME_VERSION="$RUNTIM
 make -j
 echo "Build complete. The following shared libraries were created:"
 ls ./*.so
+execstack -c ./*.so*
 echo "Copying shared libraries to artifacts directory..."
 mkdir -p ${ARTIFACTS_DIR}/X86_64
 cp ./*.so* ${ARTIFACTS_DIR}/X86_64
