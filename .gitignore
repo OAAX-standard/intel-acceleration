@@ -1,8 +1,0 @@
-# Folder for storing build artifacts
-artifacts 
-
-# Folders
-*.egg-info
-build
-cmake-build-debug
-.idea
