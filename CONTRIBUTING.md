@@ -69,7 +69,7 @@ Ensure you have the following minimum versions installed:
 - A C++ compiler supporting C++17 (e.g., g++ 9+, clang 10+)
 - Docker (for building the toolchain images)
 - Python 3.8+ (if you work with Python scripts)
-- Any OS prerequisites (Ubuntu 20.04 / Debian 11 preferred)
+- Any OS prerequisites (Ubuntu 22.04)
 
 ### 4. Build locally
 
@@ -77,14 +77,14 @@ For example, to build the runtime library:
 
 ```runtimelib
 cd runtime-library
-./build.sh 
+./build-runtimes.sh 
 ```
 Artifacts will be placed in **runtime-library/artifacts/**.
 Similarly for the conversion toolchain:
 
 ```conversiontool
 cd conversion-toolchain
-./build.sh
+./build-runtimes.sh
 ```
 
 ### 5. IDE / Editor recommendation
@@ -121,32 +121,6 @@ fix(runtime): correct buffer overflow
 docs: update development setup
 ```
 - Code comments: Use Doxygen-style comments for public APIs.
-
-## Pre-commit Hooks & Automation
-
-We use pre-commit hooks to automate formatting, linting and validation.
-
-### Setup
-
-1. Install the ```pre-commit``` tool (Python):
-
-```
-pip install pre-commit
-```
-
-2. Enable the hooks by running:
-
-```
-pre-commit install
-```
-
-### Hooks configured
-
-- **clang-format** check / auto‐format for C++ files
-- **clang-tidy** or **cppcheck** for static analysis
-- **isort** / **black** for Python scripts (if applicable)
-- ```git diff --check``` to catch trailing whitespace, etc.
-All checks should pass before submitting a PR.
 
 ## Testing Changes Locally
 
