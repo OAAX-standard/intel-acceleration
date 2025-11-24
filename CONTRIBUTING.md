@@ -84,7 +84,7 @@ Similarly for the conversion toolchain:
 
 ```conversiontool
 cd conversion-toolchain
-./build-runtimes.sh
+./build-toolchain.sh
 ```
 
 ### 5. IDE / Editor recommendation
@@ -121,28 +121,6 @@ fix(runtime): correct buffer overflow
 docs: update development setup
 ```
 - Code comments: Use Doxygen-style comments for public APIs.
-
-## Testing Changes Locally
-
-### Framework
-
-- Unit tests (C++ + Google Test) and/or integration tests are located under **runtime-library/tests/**.
-- Python scripts (if any) in **scripts/** may also include test functions.
-
-### Running tests
-
-```test
-cd runtime-library
-./run_tests.sh   # or the equivalent script
-```
-
-### Code coverage
-- We recommend running coverage tools (e.g., **lcov** / **gcov**) and aim for > 80 % coverage on core modules.
-
-### Manual testing
-
-- After building, run the runtime with a sample ONNX model and the OpenVINO Execution Provider to verify inference works correctly.
-- Verify artifacts are generated in **artifacts/** and that Docker images run successfully.
 
 ## Project Structure & Architecture Overview
 
