@@ -2,7 +2,7 @@
 #include <vector>
 
 #include "runtime_utils.hpp"
-#include <onnxruntime_cxx_api.h>
+#include <openvino/openvino.hpp>
 #include "concurrentqueue.h"
 
 #include <spdlog/async.h>
@@ -13,87 +13,65 @@
 
 using namespace std;
 
-vector<char *> get_output_names(Ort::Session &session)
-{
-    // Define the allocator
-    Ort::AllocatorWithDefaultOptions allocator;
-    // Read number of outputs
-    size_t output_count = session.GetOutputCount();
-    // Create names holder
-    std::vector<char *> output_names;
-    output_names.reserve(output_count);
-    // Read output names
-    for (size_t i = 0; i < output_count; ++i)
-    {
-        Ort::AllocatedStringPtr nameAllocated = session.GetOutputNameAllocated(i, allocator);
-        output_names.emplace_back(nameAllocated.release()); // transfer ownership
-    }
-    // Return
-    return output_names;
-}
-
-// Map tensor_data_type to ONNX Runtime ONNXTensorElementDataType
-ONNXTensorElementDataType map_to_ort_type(tensor_data_type t)
+// Map tensor_data_type to OpenVINO element type
+ov::element::Type map_to_ov_type(tensor_data_type t)
 {
     switch (t)
     {
     case DATA_TYPE_FLOAT:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+        return ov::element::f32;
     case DATA_TYPE_UINT8:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8;
+        return ov::element::u8;
     case DATA_TYPE_INT8:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8;
+        return ov::element::i8;
     case DATA_TYPE_UINT16:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16;
+        return ov::element::u16;
     case DATA_TYPE_INT16:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16;
+        return ov::element::i16;
     case DATA_TYPE_INT32:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32;
+        return ov::element::i32;
     case DATA_TYPE_INT64:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+        return ov::element::i64;
     case DATA_TYPE_BOOL:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+        return ov::element::boolean;
     case DATA_TYPE_DOUBLE:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE;
+        return ov::element::f64;
     case DATA_TYPE_UINT32:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32;
+        return ov::element::u32;
     case DATA_TYPE_UINT64:
-        return ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64;
+        return ov::element::u64;
     default:
         throw std::runtime_error("Unsupported data type!");
     }
 }
 
-// Map ONNX Runtime ONNXTensorElementDataType to tensor_data_type
-tensor_data_type map_to_tensors_struct_type(ONNXTensorElementDataType type)
+// Map OpenVINO element type to tensor_data_type
+tensor_data_type map_to_tensors_struct_type(ov::element::Type type)
 {
-    switch (type)
-    {
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+    if (type == ov::element::f32)
         return DATA_TYPE_FLOAT;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT8:
+    else if (type == ov::element::u8)
         return DATA_TYPE_UINT8;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT8:
+    else if (type == ov::element::i8)
         return DATA_TYPE_INT8;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT16:
+    else if (type == ov::element::u16)
         return DATA_TYPE_UINT16;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16:
+    else if (type == ov::element::i16)
         return DATA_TYPE_INT16;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32:
+    else if (type == ov::element::i32)
         return DATA_TYPE_INT32;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64:
+    else if (type == ov::element::i64)
         return DATA_TYPE_INT64;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL:
+    else if (type == ov::element::boolean)
         return DATA_TYPE_BOOL;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_DOUBLE:
+    else if (type == ov::element::f64)
         return DATA_TYPE_DOUBLE;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT32:
+    else if (type == ov::element::u32)
         return DATA_TYPE_UINT32;
-    case ONNX_TENSOR_ELEMENT_DATA_TYPE_UINT64:
+    else if (type == ov::element::u64)
         return DATA_TYPE_UINT64;
-    default:
-        throw std::runtime_error("Unsupported data type!");
-    }
+    else
+        throw std::runtime_error("Unsupported OpenVINO element type!");
 }
 
 void free_queue(moodycamel::ConcurrentQueue<tensors_struct *> &queue)
