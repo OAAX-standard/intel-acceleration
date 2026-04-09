@@ -6,7 +6,7 @@ Run with: pytest tests/test_docker.py -v
 
 Prerequisites:
 - Docker installed and running
-- Docker image built: docker build -t openvino-converter .
+- Docker image built: IMAGE_NAME=oaax-intel-toolchain bash conversion-toolchain/build-toolchain.sh
 """
 import pytest
 import subprocess
@@ -17,13 +17,10 @@ import json
 from pathlib import Path
 import time
 
-# Import model downloader
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from tests.download_test_models import download_model
+from tests.models import download_model
 
 # Docker image name
-DOCKER_IMAGE = "openvino-converter:latest"
+DOCKER_IMAGE = "oaax-intel-toolchain:latest"
 
 
 def docker_available():

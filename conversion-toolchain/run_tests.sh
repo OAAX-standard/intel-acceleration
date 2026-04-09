@@ -1,33 +1,17 @@
 #!/bin/bash
+# Tests have moved to the project root. Run from there.
 set -e
 
-echo "========================================="
-echo "Phase 1 Unit Tests - Conversion Toolchain"
-echo "========================================="
-echo ""
+ROOT_DIR="$(dirname "$0")/.."
+cd "$ROOT_DIR"
 
-# Navigate to the conversion-toolchain directory
-cd "$(dirname "$0")"
-
-# Create virtual environment if it doesn't exist
 if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    uv venv .venv
+    uv venv
 fi
-
-# Activate virtual environment
 source .venv/bin/activate
 
-echo "Installing dependencies with uv..."
-uv pip install -e ".[test]"
+uv sync
 
 echo ""
-echo "Running pytest..."
+pytest tests/test_conversion.py tests/test_docker.py -v --tb=short
 echo ""
-
-pytest tests/ -v --tb=short
-
-echo ""
-echo "========================================="
-echo "All Phase 1 tests completed!"
-echo "========================================="

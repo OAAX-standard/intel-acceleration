@@ -6,6 +6,13 @@ from pathlib import Path
 from typing import List, Optional
 from PIL import Image
 import openvino as ov
+import openvino.runtime as _ov_runtime
+
+# Patch: OpenVINO 2024.6+ moved Node out of the top-level namespace.
+# NNCF references ov.Node in class-level type annotations (evaluated eagerly),
+# so we restore the alias before NNCF is imported.
+if not hasattr(ov, 'Node'):
+    ov.Node = _ov_runtime.Node
 
 try:
     import nncf
@@ -134,8 +141,7 @@ def quantize_model(
     """
     if not NNCF_AVAILABLE:
         error_msg = (
-            "NNCF is not installed. Install it with: "
-            "uv pip install -e \".[quantization]\" or pip install nncf>=2.11.0"
+            "NNCF is not installed. Install it with: uv sync --extra quantization"
         )
         if logs:
             logs.add_message("Quantization Error", {"Error": error_msg})
@@ -177,7 +183,6 @@ def quantize_model(
     preset_mapping = {
         "performance": nncf.QuantizationPreset.PERFORMANCE,
         "mixed": nncf.QuantizationPreset.MIXED,
-        "accuracy": nncf.QuantizationPreset.ACCURACY
     }
 
     nncf_preset = preset_mapping.get(preset, nncf.QuantizationPreset.MIXED)

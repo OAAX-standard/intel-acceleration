@@ -106,7 +106,6 @@ zip -r input/model.zip model.onnx config.json calibration/
 **Presets:**
 - `performance` - Max speed, some accuracy loss
 - `mixed` - Balanced (recommended)
-- `accuracy` - Max accuracy preservation
 
 See [CONFIG_SCHEMA.md](CONFIG_SCHEMA.md) for all options.
 
@@ -114,30 +113,36 @@ See [CONFIG_SCHEMA.md](CONFIG_SCHEMA.md) for all options.
 
 ## Testing
 
+Tests live in the project root `tests/` directory and are run with `uv` from there.
+
 ### Quick Validation
 
 ```bash
 ./quick-test.sh
 ```
 
-Validates installation without requiring Docker.
-
-### Full Docker Test
-
-```bash
-./test_docker_image.sh
-```
-
-Downloads test model, builds image, and validates conversion.
-
 ### Unit Tests
 
 ```bash
-# Install test dependencies
-pip install pytest
-
-# Run tests
+# From project root
+uv sync
 pytest tests/test_conversion.py -v
+```
+
+### Docker Tests
+
+```bash
+# Requires image to be built first
+IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
+pytest tests/test_docker.py -v
+```
+
+### YOLO Integration Tests
+
+```bash
+# From project root
+uv sync --extra integration
+pytest tests/test_yolo_integration.py -v
 ```
 
 ---
@@ -219,11 +224,9 @@ conversion_toolchain /input/model.zip /output
 ### Installation
 
 ```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install package
-uv pip install -e .
+# From project root — installs conversion_toolchain + test deps
+uv venv && source .venv/bin/activate
+uv sync
 ```
 
 ### Usage
@@ -235,13 +238,10 @@ conversion_toolchain input/model.zip output/
 ### Development
 
 ```bash
-# Install with test dependencies
-uv pip install -e ".[test]"
-
-# Run tests
+# Run all tests from project root
 pytest tests/ -v
 
-# Run validation
+# Run validation script (no Docker required)
 ./quick-test.sh
 ```
 

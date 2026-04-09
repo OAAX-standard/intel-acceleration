@@ -197,3 +197,17 @@ else()
     COMMAND cp -P ${OPENVINO_LIB_DIR}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/ || true
   )
 endif()
+
+# === Test Executables ===
+set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
+
+foreach(TEST_NAME simple_test yolo_test)
+  add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
+  target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
+  target_link_libraries(${TEST_NAME} PRIVATE RuntimeLibrary)
+  # Ensure test binary finds the shared libraries in the same directory at runtime
+  set_target_properties(${TEST_NAME} PROPERTIES
+    BUILD_RPATH "$ORIGIN"
+    INSTALL_RPATH "$ORIGIN"
+  )
+endforeach()

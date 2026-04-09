@@ -251,6 +251,20 @@ runtime_initialization_with_args(1, keys, values);
 - `libtbb.so.12` - Threading Building Blocks
 - Additional plugins for GPU/NPU if used
 
+## Testing
+
+Tests live in the project root `tests/` directory.
+
+```bash
+# Build test binaries (done automatically by build-runtimes.sh)
+cd runtime-library/build && make simple_test yolo_test
+
+# Run
+./simple_test                # init/destroy smoke test
+./yolo_test <model.xml>      # full inference test with YOLO IR model
+./yolo_test <model.xml> GPU  # test on GPU
+```
+
 ## Project Structure
 
 ```
@@ -270,6 +284,8 @@ runtime-library/
 └── README.md                 # This file
 ```
 
+Tests: `../tests/runtime/simple_test.cpp`, `../tests/runtime/yolo_test.cpp`
+
 ## Examples
 
 For complete examples and applications using the OAAX runtime, visit:
@@ -281,5 +297,4 @@ See repository license.
 
 ## Next Steps
 
-- **Phase 3:** Further C++ runtime optimizations
-- **Phase 4:** Multi-device and heterogeneous execution support
+See `.claude/PLAN.md` for the current roadmap.

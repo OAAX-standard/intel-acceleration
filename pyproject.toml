@@ -1,0 +1,21 @@
+[project]
+name = "intel-acceleration-tests"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "conversion-toolchain",
+    "openvino-dev>=2024.0",
+    "pytest>=7.0",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+integration = ["ultralytics>=8.3.0"]
+quantization = ["nncf>=2.14.0,<2.15.0"]
+all = ["intel-acceleration-tests[integration,quantization]"]
+
+[tool.uv.sources]
+conversion-toolchain = { path = "conversion-toolchain", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

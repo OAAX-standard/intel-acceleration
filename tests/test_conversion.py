@@ -11,14 +11,11 @@ from pathlib import Path
 import numpy as np
 import openvino as ov
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from conversion_toolchain.utils import convert_to_ir, md5_hash, extract_input_bundle
 from conversion_toolchain.config import OptimizationConfig
 from conversion_toolchain.logger import Logs
 from conversion_toolchain.quantization import is_nncf_available
-from tests.download_test_models import download_model, get_model_info, TEST_MODELS
+from tests.models import download_model, get_model_info, TEST_MODELS
 
 
 class TestRealModels:
