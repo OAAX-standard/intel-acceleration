@@ -100,9 +100,11 @@ if(NOT MSVC)
   set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -Wno-missing-field-initializers -Wno-attribute-warning")
   set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -fdata-sections -ffunction-sections -Wl,--gc-sections -fno-exceptions")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wformat -Wformat-security -fdata-sections -ffunction-sections -Wl,--gc-sections")
+  # OpenVINO Python package libs use the pre-C++11 ABI (old std::string).
+  # Without this flag the cross-compiler generates __cxx11 symbols that don't match.
   set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
-  set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
+  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -D_GLIBCXX_USE_CXX11_ABI=0")
+  set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -D_GLIBCXX_USE_CXX11_ABI=0")
 endif()
 
 # === Generic Build Settings ===
@@ -161,7 +163,13 @@ target_include_directories(RuntimeLibrary PUBLIC
 )
 
 # === Link Directories ===
+# OPENVINO_LINK_DIR can point to a directory of unversioned symlinks when the
+# OpenVINO package only ships versioned .so files (e.g. libopenvino.so.2450).
+if(NOT DEFINED OPENVINO_LINK_DIR)
+  set(OPENVINO_LINK_DIR ${OPENVINO_LIB_DIR})
+endif()
 target_link_directories(RuntimeLibrary PUBLIC
+  ${OPENVINO_LINK_DIR}
   ${OPENVINO_LIB_DIR}
 )
 
@@ -204,6 +212,7 @@ set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
 foreach(TEST_NAME simple_test yolo_test)
   add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
   target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
+  target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR})
   target_link_libraries(${TEST_NAME} PRIVATE RuntimeLibrary)
   # Ensure test binary finds the shared libraries in the same directory at runtime
   set_target_properties(${TEST_NAME} PROPERTIES

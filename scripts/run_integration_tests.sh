@@ -46,7 +46,7 @@ fi
 source .venv/bin/activate
 
 echo "Syncing dependencies..."
-uv sync --extra integration -q
+uv sync --extra integration --extra quantization -q
 
 pass "Environment ready"
 
@@ -109,12 +109,26 @@ BUILD_DIR="$RUNTIME_DIR/build"
 if [ ! -f "$BUILD_DIR/yolo_test" ]; then
     echo "Building test binaries..."
     OPENVINO_DIR="${OPENVINO_DIR:-/usr/local/lib/python3.10/dist-packages/openvino}"
+    CMAKE_BIN="${CMAKE_BIN:-/usr/bin/cmake}"
+
+    # The OpenVINO Python package ships only versioned .so files (e.g. libopenvino.so.2450).
+    # The linker needs unversioned symlinks (libopenvino.so). Create them in a local dir.
+    LINK_DIR="$BUILD_DIR/openvino_links"
+    mkdir -p "$LINK_DIR"
+    for lib in "$OPENVINO_DIR/libs/"*.so.*; do
+        base=$(basename "$lib")
+        # libopenvino.so.2450 -> libopenvino.so  |  libtbb.so.12 -> libtbb.so
+        unversioned="${base%%\.*}.so"
+        ln -sf "$lib" "$LINK_DIR/$unversioned" 2>/dev/null || true
+    done
+
     mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
-    cmake .. \
+    "$CMAKE_BIN" .. \
         -DPLATFORM=X86_64 \
         -DCMAKE_BUILD_TYPE=Release \
         -DRUNTIME_VERSION="$(cat "$ROOT_DIR/VERSION")" \
-        -DOPENVINO_DIR="$OPENVINO_DIR" -q
+        -DOPENVINO_DIR="$OPENVINO_DIR" \
+        -DOPENVINO_LINK_DIR="$LINK_DIR"
     make -j"$(nproc)" yolo_test simple_test
     cd "$ROOT_DIR"
 fi

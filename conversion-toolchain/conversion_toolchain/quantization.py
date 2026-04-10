@@ -6,13 +6,17 @@ from pathlib import Path
 from typing import List, Optional
 from PIL import Image
 import openvino as ov
-import openvino.runtime as _ov_runtime
 
-# Patch: OpenVINO 2024.6+ moved Node out of the top-level namespace.
-# NNCF references ov.Node in class-level type annotations (evaluated eagerly),
-# so we restore the alias before NNCF is imported.
+# Patch: OpenVINO 2024.6 moved Node out of the top-level namespace into
+# openvino.runtime. NNCF 2.14 references ov.Node in class-level annotations
+# (evaluated eagerly at import time), so we restore the alias before NNCF loads.
+# OpenVINO 2026.1+ restores ov.Node directly, so the patch is a no-op there.
 if not hasattr(ov, 'Node'):
-    ov.Node = _ov_runtime.Node
+    try:
+        import openvino.runtime as _ov_runtime
+        ov.Node = _ov_runtime.Node
+    except ModuleNotFoundError:
+        pass
 
 try:
     import nncf

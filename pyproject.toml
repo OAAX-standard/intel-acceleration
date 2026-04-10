@@ -4,14 +4,14 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "conversion-toolchain",
-    "openvino-dev>=2024.0",
+    "openvino==2026.1.0",
     "pytest>=7.0",
     "numpy>=1.21",
 ]
 
 [project.optional-dependencies]
 integration = ["ultralytics>=8.3.0"]
-quantization = ["nncf>=2.14.0,<2.15.0"]
+quantization = ["nncf>=2.19.0,<3.0.0"]
 all = ["intel-acceleration-tests[integration,quantization]"]
 
 [tool.uv.sources]

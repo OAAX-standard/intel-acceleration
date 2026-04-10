@@ -11,14 +11,14 @@ authors = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    "openvino-dev>=2024.0",
+    "openvino>=2026.1.0",
     "lgg",
     "pillow>=9.0",
 ]
 
 [project.optional-dependencies]
 quantization = [
-    "nncf>=2.11.0",
+    "nncf>=2.19.0,<3.0.0",
 ]
 test = [
     "pytest>=7.0",
