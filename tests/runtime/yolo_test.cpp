@@ -91,24 +91,35 @@ static double percentile(std::vector<double> v, double p)
 /**
  * Run n inferences using separate producer and consumer threads.
  *
- * Producer records send_times[i] just before each send_input().
- * Consumer measures latency[i] = receive_time - send_times[i].
- * FIFO ordering in the runtime queue ensures output i matches input i.
+ * The producer is paced by an in_flight counter so it never queues more than
+ * max_in_flight requests ahead of the consumer.  With max_in_flight=1 (the
+ * default), the producer sends the next input only after the consumer has
+ * received the previous output, giving true per-request latency without queue
+ * build-up.  Increasing max_in_flight exercises the async queue depth.
  *
+ * FIFO ordering in the runtime queue ensures output i matches input i.
  * Returns per-request latencies (ms), or empty on failure.
  */
 static std::vector<double> run_batch(int n,
                                      std::vector<Clock::time_point> &send_times,
-                                     bool validate_first)
+                                     bool validate_first,
+                                     int max_in_flight = 1)
 {
     std::vector<double> latencies(n);
     std::atomic<bool> ok{true};
+    std::atomic<int>  in_flight{0};
 
     std::thread producer([&]() {
         for (int i = 0; i < n; ++i) {
+            // Wait until there is room in the pipeline.
+            while (in_flight.load() >= max_in_flight) {
+                if (!ok) return;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+            }
             tensors_struct *input = make_yolo_input();
             if (!input) { ok = false; return; }
             send_times[i] = Clock::now();
+            in_flight++;
             if (send_input(input) != 0) { ok = false; return; }
         }
     });
@@ -116,13 +127,12 @@ static std::vector<double> run_batch(int n,
     std::thread consumer([&]() {
         for (int i = 0; i < n; ++i) {
             tensors_struct *output = nullptr;
-            // Tight poll: receive_output() is non-blocking; yield between attempts
-            // to give the inference thread and OS scheduler breathing room.
             while (receive_output(&output) != 0) {
-                if (!ok) return;  // producer failed — stop waiting
+                if (!ok) return;
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
             latencies[i] = Ms(Clock::now() - send_times[i]).count();
+            in_flight--;
 
             if (validate_first && i == 0 && !validate_output(output)) {
                 std::cerr << "FAIL: unexpected output shape, type, or all-zero data"
