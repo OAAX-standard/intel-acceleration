@@ -16,6 +16,8 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Current Status
 
+**Last Updated:** 2026-04-11
+
 ### ✅ Completed Phases
 
 #### Phase 1: Conversion Toolchain (COMPLETED)
@@ -119,18 +121,28 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Next Steps (Phase 3+)
 
-### Phase 3: Production Hardening (PLANNED)
+### Phase 3: Production Hardening (IN PROGRESS)
 **Target:** Q2 2026
 **Priority:** High
-**Status:** Not started
+**Status:** Partially complete
+
+**Completed in Phase 3:**
+- ✅ Upgraded to OpenVINO 2026.1.0 + NNCF 2.19.0
+- ✅ Two-stage test framework (stage1_compile.sh + stage2_run.sh)
+- ✅ GPU/NPU validation on real hardware (Intel UHD 770 + NVIDIA RTX A4000)
+- ✅ Benchmark suite: benchmark_app with FP32/FP16/INT8 × all devices
+- ✅ CSV output for cross-run benchmark comparison
+- ✅ yolo_test rewritten as multi-run benchmark (warmup + N runs, avg/min/max/p95)
+- ✅ GCC dual-ABI fix (-D_GLIBCXX_USE_CXX11_ABI=0) for C++ runtime
+- ✅ NNCF/OpenVINO compatibility shim for openvino.Node import path changes
 
 **Goals:**
 1. **Comprehensive Testing**
-   - End-to-end integration tests
-   - Performance benchmarking suite
-   - Stress testing (memory leaks, long-running)
-   - Multi-threading safety tests
-   - GPU/NPU device testing
+   - ✅ End-to-end integration tests (two-stage framework)
+   - ✅ Performance benchmarking suite (benchmark_app + yolo_test + CSV)
+   - ✅ GPU/NPU device testing (Intel UHD 770, NVIDIA RTX A4000)
+   - ☐ Stress testing (memory leaks, long-running)
+   - ☐ Multi-threading safety tests
 
 2. **Enhanced Error Handling**
    - Detailed error messages with recovery suggestions
@@ -243,6 +255,24 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ⚠️ GPU/NPU tests require specific hardware
 - ⚠️ Performance benchmarks need diverse model set
 - ⚠️ Long-running stability tests not automated
+
+---
+
+## Performance Benchmarks (Phase 3, Intel Core i7-13700K)
+
+| Model | Precision | Device | Avg ms | p95 ms | Throughput |
+|-------|-----------|--------|--------|--------|------------|
+| YOLOv8n | FP32 | CPU | 13.8 | 14.5 | 71.6 FPS |
+| YOLOv8n | FP16 | CPU | 13.5 | 14.0 | 72.9 FPS |
+| YOLOv8n | INT8 | CPU | **5.2** | 5.6 | **187 FPS** |
+| YOLOv8n | FP32 | GPU.0 (Intel UHD 770) | ~12 | — | ~80 FPS |
+| YOLOv8n | INT8 | GPU.0 (Intel UHD 770) | ~8 | — | ~116 FPS |
+| YOLOv11n | INT8 | CPU | 5.3 | 5.7 | 185 FPS |
+
+Measured with `benchmark_app -hint latency -latency_percentile 95`.
+
+> **Important:** `yolo_test` (OAAX C++ runtime) reports ~100ms latency — this is async queue
+> round-trip overhead, not inference time. Pure inference is ~5–13ms per the table above.
 
 ---
 
