@@ -87,7 +87,7 @@ for xml in "$COMPILED_DIR"/*/FP32/*.xml \
     model=$(basename "$xml" .xml)
     for device in "${DEVICES[@]}"; do
         out=$(benchmark_app -m "$xml" -d "$device" \
-              -hint latency -latency_percentile 95 -t "$DURATION" 2>&1)
+              -hint throughput -latency_percentile 95 -t "$DURATION" 2>&1)
 
         avg=$(echo "$out" | awk '/Average:/{print $(NF-1)}')
         min=$(echo "$out" | awk '/   Min:/{print $(NF-1)}')
@@ -155,7 +155,7 @@ for xml in "$COMPILED_DIR"/*/FP32/*.xml; do
             avg=$(echo "$out" | awk '/  Avg /{print $(NF-1)}')
             min=$(echo "$out" | awk '/  Min /{print $(NF-1)}')
             p95=$(echo "$out" | awk '/  p95 /{print $(NF-1)}')
-            fps=$(echo "$avg" | awk '{printf "%.2f", 1000/$1}')
+            fps=$(echo "$out" | awk '/  Throughput /{print $(NF-1)}')
 
             printf "  %-10s  %-6s  %-8s  %7sms  %7sms  %7sms  %10s FPS\n" \
                 "$model" "FP32" "$device" "$avg" "$min" "$p95" "$fps"

@@ -196,8 +196,7 @@ static void inference_thread_func()
         tensors_struct *input_tensors = nullptr;
         if (!input_tensors_queue.try_dequeue(input_tensors))
         {
-            logger->trace("No input tensors available, sleeping for 10ms...");
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
@@ -301,25 +300,13 @@ static void inference_thread_func()
 
 extern "C" int receive_output(tensors_struct **output_tensors)
 {
-    logger->debug("Waiting for output tensors...");
-    logger->debug("Output queue contains {} tensors.", output_tensors_queue.size_approx());
-
-    // Check if there are any output tensors in the queue
-    if (output_tensors_queue.size_approx() == 0)
-    {
-        logger->debug("No output tensors available, sleeping for 100ms...");
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        logger->trace("Woke up from sleep.");
-        return -1;
-    }
-
-    // Get the next output tensor from the queue
+    // Non-blocking: returns 0 with output on success, -1 when nothing is ready.
+    // Callers are responsible for their own retry/sleep policy.
     if (!output_tensors_queue.try_dequeue(*output_tensors))
     {
-        logger->error("Failed to dequeue output tensors.");
+        logger->trace("No output tensors available.");
         return -1;
     }
-
     logger->debug("Output tensors received successfully.");
     return 0;
 }
