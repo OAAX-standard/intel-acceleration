@@ -203,18 +203,28 @@ if(MSVC)
   )
 
   # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
-  # into the output directory alongside RuntimeLibrary.dll.
-  # Done at build time via PowerShell so the archive must exist before building.
+  # alongside RuntimeLibrary.dll. OpenVINO must be extracted before cmake runs.
+  # Using file(GLOB) + list(FILTER) at configure time and cmake -E copy_if_different
+  # at build time — avoids PowerShell/cmd.exe pipe-character escaping issues.
   set(OPENVINO_TBB_BIN_DIR "${OPENVINO_DIR}/3rdparty/tbb/bin")
-  add_custom_command(TARGET RuntimeLibrary POST_BUILD
-    # Where-Object uses the simplified property syntax (no script block / curly braces)
-    # to avoid MSBuild misinterpreting {} as property function delimiters.
-    COMMAND PowerShell -NoProfile -Command
-      "Get-ChildItem '${OPENVINO_BIN_DIR}' -Filter *.dll | Where-Object Name -notmatch 'openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend' | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
-    COMMAND PowerShell -NoProfile -Command
-      "Get-ChildItem '${OPENVINO_TBB_BIN_DIR}' -Filter *.dll | Where-Object Name -notmatch '_debug' | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
-    VERBATIM
-  )
+
+  file(GLOB OPENVINO_DLLS "${OPENVINO_BIN_DIR}/*.dll")
+  list(FILTER OPENVINO_DLLS EXCLUDE REGEX
+    "openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend")
+
+  file(GLOB TBB_DLLS "${OPENVINO_TBB_BIN_DIR}/*.dll")
+  list(FILTER TBB_DLLS EXCLUDE REGEX "_debug\\.dll$")
+
+  if(OPENVINO_DLLS OR TBB_DLLS)
+    add_custom_command(TARGET RuntimeLibrary POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${OPENVINO_DLLS} ${TBB_DLLS}
+        "$<TARGET_FILE_DIR:RuntimeLibrary>/"
+      VERBATIM
+    )
+  else()
+    message(WARNING "No OpenVINO/TBB DLLs found at configure time — package will be incomplete.")
+  endif()
 else()
   target_link_libraries(RuntimeLibrary PUBLIC
     -Wl,--start-group
