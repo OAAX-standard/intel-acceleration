@@ -109,7 +109,7 @@ pass "benchmark_app done"
 
 [[ "$SKIP_RUNTIME" -eq 1 ]] && { echo "Skipping C++ runtime tests."; exit 0; }
 
-header "Step 2: yolo_test  (OAAX runtime library, FP32 models)"
+header "Step 2: yolo_test  (OAAX runtime library, all variants)"
 
 BUILD_DIR="$RUNTIME_DIR/build"
 
@@ -143,13 +143,16 @@ printf "  %-10s  %-6s  %-8s  %8s  %8s  %8s  %12s\n" \
 
 pass_count=0; fail_count=0
 
-for xml in "$COMPILED_DIR"/*/FP32/*.xml; do
+for xml in "$COMPILED_DIR"/*/FP32/*.xml \
+           "$COMPILED_DIR"/*/FP16/*.xml \
+           "$COMPILED_DIR"/*/INT8/*.xml; do
     [[ -f "$xml" ]] || continue
+    variant=$(basename "$(dirname "$xml")")
     model=$(basename "$xml" .xml)
     xml_abs="$(realpath "$xml")"
     for device in "${DEVICES[@]}"; do
         out=$(cd "$BUILD_DIR" && LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH" \
-              ./yolo_test "$xml_abs" "$device" --warmup 5 --runs 30 2>&1)
+              ./yolo_test "$xml_abs" "$device" --warmup 5 --runs 30 --perf-hint throughput 2>&1)
 
         if echo "$out" | grep -q "=== Results ==="; then
             avg=$(echo "$out" | awk '/  Avg /{print $(NF-1)}')
@@ -158,12 +161,12 @@ for xml in "$COMPILED_DIR"/*/FP32/*.xml; do
             fps=$(echo "$out" | awk '/  Throughput /{print $(NF-1)}')
 
             printf "  %-10s  %-6s  %-8s  %7sms  %7sms  %7sms  %10s FPS\n" \
-                "$model" "FP32" "$device" "$avg" "$min" "$p95" "$fps"
+                "$model" "$variant" "$device" "$avg" "$min" "$p95" "$fps"
 
-            csv_row "yolo_test" "$model" "FP32" "$device" "$avg" "$min" "$p95" "$fps"
+            csv_row "yolo_test" "$model" "$variant" "$device" "$avg" "$min" "$p95" "$fps"
             pass_count=$((pass_count + 1))
         else
-            printf "  %-10s  %-6s  %-8s  %s\n" "$model" "FP32" "$device" "FAILED"
+            printf "  %-10s  %-6s  %-8s  %s\n" "$model" "$variant" "$device" "FAILED"
             fail_count=$((fail_count + 1))
         fi
     done

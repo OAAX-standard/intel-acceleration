@@ -21,7 +21,8 @@ typedef enum {
     DATA_TYPE_BOOL = 7,
     DATA_TYPE_DOUBLE = 8,
     DATA_TYPE_UINT32 = 9,
-    DATA_TYPE_UINT64 = 10
+    DATA_TYPE_UINT64 = 10,
+    DATA_TYPE_FLOAT16 = 11
 } tensor_data_type;
 
 // Struct to hold multiple tensors
@@ -48,6 +49,7 @@ static inline int get_data_type_byte_size(tensor_data_type type) {
         case DATA_TYPE_DOUBLE: return 8;
         case DATA_TYPE_UINT32: return 4;
         case DATA_TYPE_UINT64: return 8;
+        case DATA_TYPE_FLOAT16: return 2;
         default: return 0;
     }
 }

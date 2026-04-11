@@ -40,6 +40,8 @@ ov::element::Type map_to_ov_type(tensor_data_type t)
         return ov::element::u32;
     case DATA_TYPE_UINT64:
         return ov::element::u64;
+    case DATA_TYPE_FLOAT16:
+        return ov::element::f16;
     default:
         throw std::runtime_error("Unsupported data type!");
     }
@@ -70,6 +72,8 @@ tensor_data_type map_to_tensors_struct_type(ov::element::Type type)
         return DATA_TYPE_UINT32;
     else if (type == ov::element::u64)
         return DATA_TYPE_UINT64;
+    else if (type == ov::element::f16)
+        return DATA_TYPE_FLOAT16;
     else
         throw std::runtime_error("Unsupported OpenVINO element type!");
 }
