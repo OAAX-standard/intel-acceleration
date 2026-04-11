@@ -753,43 +753,123 @@ echo "  Size: $(docker images ${IMAGE_NAME} --format '{{.Size}}')"
 **Location:** `runtime-library/CMakeLists.txt`
 
 ```cmake
-# Find OpenVINO
+# Find OpenVINO (archive layout: runtime/ subdirectory)
 if(NOT DEFINED OPENVINO_DIR)
-    set(OPENVINO_DIR "/usr/local/lib/python3.10/dist-packages/openvino")
+    set(OPENVINO_DIR "/opt/intel/openvino/runtime")
 endif()
 
 set(OPENVINO_INCLUDE_DIR "${OPENVINO_DIR}/include")
-set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/libs")
+
+# CRITICAL: use WIN32, not MSVC — MSVC is only set after project() is called.
+# Any if(MSVC) check before project() always evaluates to false.
+if(WIN32)
+    set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/lib/intel64/Release")
+    set(OPENVINO_BIN_DIR "${OPENVINO_DIR}/bin/intel64/Release")
+else()
+    set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/lib/intel64")
+endif()
+
+# TBB is bundled at runtime/3rdparty/tbb/
+set(OPENVINO_TBB_LIB_DIR "${OPENVINO_DIR}/3rdparty/tbb/lib")
 
 # Verify installation
 if(NOT EXISTS "${OPENVINO_INCLUDE_DIR}/openvino/openvino.hpp")
     message(FATAL_ERROR "OpenVINO not found at ${OPENVINO_DIR}")
 endif()
 
-# Add includes
-target_include_directories(RuntimeLibrary PUBLIC
-    ${INCLUDE_DIR}
-    ${OPENVINO_INCLUDE_DIR}
-)
+target_include_directories(RuntimeLibrary PUBLIC ${OPENVINO_INCLUDE_DIR})
+target_link_directories(RuntimeLibrary PUBLIC ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
+target_link_libraries(RuntimeLibrary PUBLIC openvino spdlog::spdlog pthread dl c_utilities stdc++)
+```
 
-# Link directories
-target_link_directories(RuntimeLibrary PUBLIC
-    ${OPENVINO_LIB_DIR}
-)
+### Pattern: Copying OpenVINO libs post-build (Linux)
 
-# Link libraries
-target_link_libraries(RuntimeLibrary PUBLIC
-    openvino      # Main OpenVINO library
-    tbb           # Threading Building Blocks
-    spdlog::spdlog
-    pthread dl stdc++
-)
+Use `find -exec {} +` (not `";"`) with VERBATIM to avoid shell glob expansion and the `missing argument to -exec` error.
 
-# Copy shared libraries to build directory
+```cmake
 add_custom_command(TARGET RuntimeLibrary POST_BUILD
-    COMMAND cp -P ${OPENVINO_LIB_DIR}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/ || true
+  COMMAND find ${OPENVINO_LIB_DIR} -maxdepth 1 -name "*.so*"
+    "!" -name "libopenvino_onnx_frontend*"
+    "!" -name "libopenvino_pytorch_frontend*"
+    "!" -name "libopenvino_tensorflow_frontend*"
+    "!" -name "libopenvino_tensorflow_lite_frontend*"
+    "!" -name "libopenvino_paddle_frontend*"
+    "!" -name "libopenvino_jax_frontend*"
+    -exec cp -P --target-directory=${CMAKE_CURRENT_BINARY_DIR} {} +
+  COMMAND find ${OPENVINO_TBB_LIB_DIR} -maxdepth 1 -name "*.so*"
+    -exec cp -P --target-directory=${CMAKE_CURRENT_BINARY_DIR} {} +
+  VERBATIM
 )
 ```
+
+**Pitfalls:**
+- Without `VERBATIM`, CMake shell-expands `*.so*` in the generated Makefile — find matches nothing
+- `";"` in a CMake COMMAND list is treated as a CMake list separator and silently dropped — use `+` terminator
+- With `+` terminator, `{}` must be the second-to-last token before `+` (i.e. `--target-directory=DEST {} +`)
+
+### Pattern: Copying OpenVINO DLLs post-build (Windows)
+
+Windows DLLs may live in `bin/intel64/Release/` (OpenVINO 2026.x archive). Use a `cmake -P` script so globbing happens at **build time** (not configure time — the archive may not be extracted yet during `cmake ..`).
+
+**`cmake/copy_windows_dlls.cmake`:**
+```cmake
+# Probe both candidate dirs in case archive layout varies across OV versions
+foreach(_candidate "${SRC_BIN_DIR}" "${SRC_LIB_DIR}")
+    file(GLOB _found "${_candidate}/*.dll")
+    if(_found)
+        set(_openvino_dlls ${_found})
+        message(STATUS "copy_windows_dlls: found OpenVINO DLLs in ${_candidate}")
+        break()
+    endif()
+endforeach()
+
+foreach(dll ${_openvino_dlls})
+    get_filename_component(name "${dll}" NAME)
+    if(NOT name MATCHES "openvino_onnx_frontend|openvino_pytorch_frontend|...")
+        file(COPY "${dll}" DESTINATION "${DST_DIR}")
+    endif()
+endforeach()
+
+file(GLOB tbb_dlls "${SRC_TBB_DIR}/*.dll")
+foreach(dll ${tbb_dlls})
+    get_filename_component(name "${dll}" NAME)
+    if(NOT name MATCHES "_debug\\.dll$")
+        file(COPY "${dll}" DESTINATION "${DST_DIR}")
+    endif()
+endforeach()
+```
+
+**`CMakeLists.txt` invocation (inside `if(MSVC)` post-link block):**
+```cmake
+set(OPENVINO_TBB_BIN_DIR "${OPENVINO_DIR}/3rdparty/tbb/bin")
+add_custom_command(TARGET RuntimeLibrary POST_BUILD
+  COMMAND ${CMAKE_COMMAND}
+    "-DSRC_BIN_DIR=${OPENVINO_BIN_DIR}"
+    "-DSRC_LIB_DIR=${OPENVINO_LIB_DIR}"
+    "-DSRC_TBB_DIR=${OPENVINO_TBB_BIN_DIR}"
+    "-DDST_DIR=$<TARGET_FILE_DIR:RuntimeLibrary>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_windows_dlls.cmake"
+  VERBATIM
+)
+```
+
+**Why `cmake -P` instead of `file(GLOB)` + `cmake -E copy_if_different`:**
+- `file(GLOB)` at configure time returns empty if the OpenVINO archive isn't extracted yet
+- `cmake -P` scripts run at build time when files exist
+- `cmd.exe`/MSBuild parse `|` and `{}` in PowerShell strings — avoid any shell command containing these characters in a post-build step
+
+### Pattern: RPATH for bundled Linux .so files
+
+Cross-linker bakes in build-time paths (e.g. `/opt/intel/openvino/...`) as DT_RPATH. Fix with `patchelf` on **all** `.so` files — not just `libRuntimeLibrary.so` — so transitive dependencies (e.g. `libopenvino.so → libtbb.so.12`) also find their neighbours at runtime.
+
+```bash
+rpath_origin='$ORIGIN'  # shellcheck disable=SC2016
+find . -maxdepth 1 -name "*.so*" ! -type l | while read -r lib; do
+    patchelf --set-rpath "$rpath_origin" "$lib" 2>/dev/null && echo "  RPATH \$ORIGIN: $lib"
+done
+```
+
+`patchelf --set-rpath` converts DT_RPATH → DT_RUNPATH. DT_RUNPATH is NOT inherited by transitive deps; patching all libs avoids this.
 
 ### Pattern: Cross-Compilation Setup
 

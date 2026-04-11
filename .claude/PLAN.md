@@ -127,6 +127,9 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 **Status:** Partially complete
 
 **Completed in Phase 3:**
+- ✅ Windows and Linux CI builds fully working with OpenVINO 2026.1.0 archive
+- ✅ Linux artifact: libRuntimeLibrary.so + all OpenVINO .so + TBB, all patched to $ORIGIN RPATH
+- ✅ Windows artifact: RuntimeLibrary.dll + openvino.dll + device plugins + TBB DLLs (~60 MB)
 - ✅ Upgraded to OpenVINO 2026.1.0 + NNCF 2.19.0
 - ✅ Two-stage test framework (stage1_compile.sh + stage2_run.sh)
 - ✅ GPU/NPU validation on real hardware (Intel UHD 770 + NVIDIA RTX A4000)
@@ -159,6 +162,10 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
    - ✅ Semaphore-driven dispatch (no polling, no sleep)
    - ✅ Single callback registration per slot (no per-inference std::function alloc)
    - ☐ Model caching across `runtime_model_loading` calls
+
+4. **Packaging**
+   - ✅ Linux artifact complete (libRuntimeLibrary.so + OpenVINO .so + TBB, $ORIGIN RPATH)
+   - ✅ Windows artifact complete (RuntimeLibrary.dll + OpenVINO .dll + TBB)
 
 3. **Enhanced Error Handling**
    - Detailed error messages with recovery suggestions
@@ -252,7 +259,6 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ⚠️ Some ONNX operators may not be supported by OpenVINO
 
 ### Runtime Library
-- ❌ Windows build script needs updating (Linux-only currently)
 - ❌ No ARM64 support yet
 - ⚠️ GPU/NPU features implemented but not extensively tested
 - ⚠️ Dynamic shape support limited
@@ -421,6 +427,24 @@ OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8. 
 - **Rationale:** The two settings conflict — `inference_num_threads` constrains OpenVINO's internal scheduler, preventing it from using the optimal thread count implied by the hint
 - **Impact:** Removing this call improved throughput; `perf_hint` alone is sufficient
 - **Status:** Enforced (removed from codebase, documented as forbidden in CLAUDE.md)
+
+**2026-04-11: Switch from pip-installed OpenVINO to official archive for CI builds**
+- **Decision:** Download `openvino_toolkit_ubuntu22_*.tgz` / `openvino_toolkit_windows_*.zip` from storage.openvinotoolkit.org instead of `pip install openvino`
+- **Rationale:** pip package puts .so files in `dist-packages/openvino/libs/` with versioned filenames and missing unversioned symlinks needed by the cross-linker; the archive provides the standard `runtime/lib/intel64/` layout and includes bundled TBB
+- **Archive layout (Linux):** `runtime/lib/intel64/*.so*`, `runtime/3rdparty/tbb/lib/*.so*`
+- **Archive layout (Windows):** `runtime/lib/intel64/Release/*.lib`, `runtime/bin/intel64/Release/*.dll`, `runtime/3rdparty/tbb/bin/*.dll`
+- **Status:** Implemented in CI (`build-runtime.yml`), version pinned to OpenVINO 2026.1.0
+
+**2026-04-11: CMake if(WIN32) before project(), if(MSVC) after**
+- **Decision:** Use `if(WIN32)` for path configuration before `project()`, `if(MSVC)` only for post-`project()` checks
+- **Rationale:** `MSVC` is only set after CMake detects the compiler during `project()`. Any `if(MSVC)` block before `project()` silently evaluates false, leaving variables like `OPENVINO_BIN_DIR` unset. `WIN32` is available at CMake startup.
+- **Impact:** Fixed Windows DLL bundling — `OPENVINO_BIN_DIR` was empty, causing the cmake -P script to copy nothing
+- **Status:** Fixed in CMakeLists.txt (line 30)
+
+**2026-04-11: Use cmake -P script for Windows DLL copy, not file(GLOB) at configure time**
+- **Decision:** Copy OpenVINO DLLs via `cmake -P copy_windows_dlls.cmake` invoked from `add_custom_command POST_BUILD`
+- **Rationale:** `file(GLOB)` at configure time returns empty if the OpenVINO archive hasn't been extracted yet. `cmake -P` runs at build time when all files are present. Also avoids cmd.exe/MSBuild parsing issues with `|` and `{}` in PowerShell commands.
+- **Status:** Implemented in `runtime-library/cmake/copy_windows_dlls.cmake`
 
 ---
 
