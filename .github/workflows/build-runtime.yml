@@ -27,7 +27,9 @@ jobs:
         run: sudo bash scripts/setup-env.sh
 
       - name: Install OpenVINO
-        run: pip install openvino==2026.1.0
+        run: |
+          pip install openvino==2026.1.0
+          echo "OPENVINO_DIR=$(python -c 'import openvino; print(openvino.__path__[0])')" >> "$GITHUB_ENV"
 
       - name: Cross-compile runtimes
         run: bash runtime-library/build-runtimes.sh
