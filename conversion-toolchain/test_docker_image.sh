@@ -88,7 +88,7 @@ if [ ! -f "bundles/squeezenet.onnx" ]; then
             EXISTING_MODEL=$(find tests/test_models -name "*.onnx" -type f | head -1)
             if [ -n "$EXISTING_MODEL" ] && [ -f "$EXISTING_MODEL" ]; then
                 cp "$EXISTING_MODEL" bundles/squeezenet.onnx
-                success "Using existing test model: $(basename $EXISTING_MODEL)"
+                success "Using existing test model: $(basename "$EXISTING_MODEL")"
                 DOWNLOADED=true
             fi
         fi
@@ -130,8 +130,8 @@ info "Running model conversion..."
 rm -f output/squeezenet.zip output/logs.json 2>/dev/null || true
 
 if docker run --rm \
-    -v $(pwd)/bundles:/input \
-    -v $(pwd)/output:/output \
+    -v "$(pwd)/bundles:/input" \
+    -v "$(pwd)/output:/output" \
     oaax-intel-toolchain:latest /input/squeezenet.zip /output > /tmp/conversion.log 2>&1; then
     success "Conversion completed successfully"
 else
@@ -169,8 +169,8 @@ info "Testing error handling..."
 
 # Test nonexistent file (should return exit code 1)
 if docker run --rm \
-    -v $(pwd)/bundles:/input \
-    -v $(pwd)/output:/output \
+    -v "$(pwd)/bundles:/input" \
+    -v "$(pwd)/output:/output" \
     oaax-intel-toolchain:latest /input/nonexistent.zip /output > /dev/null 2>&1; then
     error "Should have failed for nonexistent file"
 else
@@ -185,8 +185,8 @@ fi
 # Test invalid zip (should return exit code 2)
 echo "not a zip" > bundles/invalid.zip
 if docker run --rm \
-    -v $(pwd)/bundles:/input \
-    -v $(pwd)/output:/output \
+    -v "$(pwd)/bundles:/input" \
+    -v "$(pwd)/output:/output" \
     oaax-intel-toolchain:latest /input/invalid.zip /output > /dev/null 2>&1; then
     error "Should have failed for invalid zip"
 else
@@ -204,8 +204,8 @@ info "Testing with resource limits..."
 if docker run --rm \
     --memory=2g \
     --cpus=1 \
-    -v $(pwd)/bundles:/input \
-    -v $(pwd)/output:/output \
+    -v "$(pwd)/bundles:/input" \
+    -v "$(pwd)/output:/output" \
     oaax-intel-toolchain:latest /input/squeezenet.zip /output > /dev/null 2>&1; then
     success "Works with resource limits"
 else

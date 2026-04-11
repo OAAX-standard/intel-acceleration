@@ -15,13 +15,15 @@ LABEL description="OpenVINO ONNX to IR Conversion Toolchain"
 LABEL version="${VERSION}"
 
 # Install system dependencies
+# hadolint ignore=DL3008,DL4006
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
     apt-get update -qq -y --fix-missing && \
-    apt-get install -qq -y gcc g++ curl make wget git cmake build-essential && \
+    apt-get install -qq -y --no-install-recommends gcc g++ curl make wget git cmake build-essential && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Install uv for faster package management
+# hadolint ignore=DL4006
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
     /root/.local/bin/uv --version
 ENV PATH="/root/.local/bin:${PATH}"
@@ -60,5 +62,6 @@ CMD ["--help"]
 # Document expected volumes
 VOLUME ["/input", "/output"]
 
-# Document that this runs as root (can be overridden)
+# Document that this runs as root (can be overridden at runtime with --user)
+# hadolint ignore=DL3002
 USER root

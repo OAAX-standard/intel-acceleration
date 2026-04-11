@@ -9,8 +9,8 @@ Downloads popular models from ONNX Model Zoo and other sources:
 - YOLOv11n (Object Detection) - exported via ultralytics
 """
 
-import urllib.request
 import shutil
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -42,7 +42,7 @@ TEST_MODELS = {
         "task": "object_detection",
         "input_shape": [1, 3, 640, 640],
         "input_name": "images",
-        "output_channels": 84,   # 4 bbox + 80 COCO classes
+        "output_channels": 84,  # 4 bbox + 80 COCO classes
         "output_anchors": 8400,  # 20x20 + 40x40 + 80x80
     },
     "yolo11n": {
@@ -69,11 +69,8 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
     """
     try:
         from ultralytics import YOLO
-    except ImportError:
-        raise ImportError(
-            "ultralytics is required for YOLO models. "
-            "Install with: pip install ultralytics"
-        )
+    except ImportError as e:
+        raise ImportError("ultralytics is required for YOLO models. Install with: pip install ultralytics") from e
 
     model_info = TEST_MODELS[model_name]
     output_path = Path(output_dir)
@@ -176,7 +173,7 @@ def download_calibration_images(output_dir: str) -> str:
         return str(images_dir)
 
     zip_path = output_path / "coco128.zip"
-    print(f"Downloading COCO128 calibration images (~7 MB)...")
+    print("Downloading COCO128 calibration images (~7 MB)...")
     urllib.request.urlretrieve(COCO128_URL, str(zip_path))
 
     with zipfile.ZipFile(zip_path) as z:
@@ -200,16 +197,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download ONNX test models")
     parser.add_argument(
-        "--model",
-        choices=list(TEST_MODELS.keys()) + ["all"],
-        default="all",
-        help="Model to download (default: all)"
+        "--model", choices=list(TEST_MODELS.keys()) + ["all"], default="all", help="Model to download (default: all)"
     )
-    parser.add_argument(
-        "--output-dir",
-        default="test_models",
-        help="Output directory (default: test_models)"
-    )
+    parser.add_argument("--output-dir", default="test_models", help="Output directory (default: test_models)")
 
     args = parser.parse_args()
 

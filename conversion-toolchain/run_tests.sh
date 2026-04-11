@@ -8,6 +8,7 @@ cd "$ROOT_DIR"
 if [ ! -d ".venv" ]; then
     uv venv
 fi
+# shellcheck source=/dev/null
 source .venv/bin/activate
 
 uv sync

@@ -18,6 +18,7 @@ header() { echo -e "${BLUE}$1${NC}"; }
 
 header "1. Checking Environment"
 if [ -f ".venv/bin/activate" ]; then
+    # shellcheck source=/dev/null
     source .venv/bin/activate
     success "Virtual environment activated"
 else
@@ -43,11 +44,9 @@ for file in "${REQUIRED_FILES[@]}"; do
 done
 
 header "3. Checking Documentation"
-for doc in README.md; do
-    if [ -f "$doc" ]; then
-        success "$doc"
-    fi
-done
+if [ -f "README.md" ]; then
+    success "README.md"
+fi
 
 header "4. Preparing Test Models"
 mkdir -p tests/test_models bundles output 2>/dev/null || true

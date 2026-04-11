@@ -23,6 +23,7 @@ header() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
 header "Step 1: Setting up environment"
 
 [[ ! -d .venv ]] && uv venv
+# shellcheck source=/dev/null
 source .venv/bin/activate
 uv sync --extra integration --extra quantization -q
 

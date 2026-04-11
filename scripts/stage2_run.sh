@@ -48,6 +48,7 @@ fi
 # ── Activate venv ─────────────────────────────────────────────────────────────
 
 [[ ! -f .venv/bin/activate ]] && fail ".venv not found — run stage1_compile.sh first"
+# shellcheck source=/dev/null
 source .venv/bin/activate
 
 # ── CSV helpers ───────────────────────────────────────────────────────────────
