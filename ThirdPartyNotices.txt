@@ -276,33 +276,20 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
-## nlohmann JSON for Modern C++ (vendored)
+## Microsoft Visual C++ Runtime (Windows package only)
 
-Source: https://github.com/nlohmann/json
-Location: runtime-library/deps/nlohmann/
-License: MIT License
+Source: https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+Location: runtime-library/deps/windows-runtime/
+License: Microsoft Visual C++ Redistributable License
+Used by: Windows runtime package (bundled for distribution on systems without the
+         Visual C++ Redistributable installed)
 
-MIT License
+Files: MSVCP140.dll, msvcp140_1.dll, vcruntime140.dll, vcruntime140_1.dll
 
-Copyright (c) 2013-2022 Niels Lohmann
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+These files are redistributable under the terms of the Microsoft Visual C++
+Redistributable license. Redistribution is permitted provided the files are
+distributed unmodified as part of an application. See:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
 
 ---
 
