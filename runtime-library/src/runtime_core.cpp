@@ -40,6 +40,7 @@ static inline int sem_destroy(sem_t *s) { return CloseHandle(s->h) ? 0 : -1; }
 using namespace std;
 
 // Helper functions
+static void log_available_devices();
 static void on_inference_complete(int idx, std::exception_ptr ex);
 static void manager_thread_func();
 static void drain_output_pool();
@@ -171,6 +172,8 @@ extern "C" int runtime_initialization() {
     logger->info("  device_type: {}", device_type);
     logger->info("  precision: {}", precision);
     logger->info("  perf_hint: {}", perf_hint);
+
+    log_available_devices();
     return 0;
   } catch (const std::exception &e) {
     last_error = e.what();
@@ -558,4 +561,43 @@ extern "C" const char *runtime_version() { return RUNTIME_VERSION; }
 
 extern "C" const char *runtime_name() {
   return "OAAX Intel Runtime (OpenVINO Native)";
+}
+
+// Scan all OpenVINO-visible devices and log their supported precisions.
+// Called once at the end of runtime_initialization() so the operator can see
+// at a glance what hardware is available and what model formats will run on it.
+static void log_available_devices() {
+  static const std::vector<std::string> kPrecisions = {"FP32", "FP16", "BF16",
+                                                       "INT8", "INT16"};
+  try {
+    auto devices = core->get_available_devices();
+    logger->info("Available devices ({} found):", devices.size());
+
+    for (const auto &dev : devices) {
+      std::string full_name = dev;
+      try {
+        full_name = core->get_property(dev, ov::device::full_name);
+      } catch (...) {
+      }
+
+      std::string precisions_str;
+      try {
+        auto caps = core->get_property(dev, ov::device::capabilities);
+        for (const auto &cap : caps)
+          for (const auto &p : kPrecisions)
+            if (cap == p) {
+              if (!precisions_str.empty()) precisions_str += ", ";
+              precisions_str += cap;
+              break;
+            }
+      } catch (...) {
+      }
+
+      if (precisions_str.empty()) precisions_str = "(unknown)";
+      logger->info("  {} — {} — precisions: {}", dev, full_name,
+                   precisions_str);
+    }
+  } catch (const std::exception &e) {
+    logger->warn("Device enumeration failed: {}", e.what());
+  }
 }
