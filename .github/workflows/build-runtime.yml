@@ -26,6 +26,9 @@ jobs:
       - name: Set up environment
         run: sudo bash scripts/setup-env.sh
 
+      - name: Install OpenVINO
+        run: pip install openvino==2026.1.0
+
       - name: Cross-compile runtimes
         run: bash runtime-library/build-runtimes.sh
 

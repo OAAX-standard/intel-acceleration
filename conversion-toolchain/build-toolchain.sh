@@ -2,7 +2,7 @@
 # Build script for OpenVINO Conversion Toolchain Docker image
 set -e
 
-IMAGE_NAME="${IMAGE_NAME:-openvino-converter}"
+IMAGE_NAME="${IMAGE_NAME:-oaax-intel-toolchain}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 
@@ -32,6 +32,13 @@ docker build \
 echo ""
 echo "Verifying build..."
 docker run --rm "${FULL_IMAGE}" --help
+
+# Save image to tar for CI artifact upload
+ARTIFACTS_DIR="conversion-toolchain/artifacts"
+mkdir -p "${ARTIFACTS_DIR}"
+echo ""
+echo "Saving image to ${ARTIFACTS_DIR}/oaax-intel-toolchain.tar ..."
+docker save "${FULL_IMAGE}" -o "${ARTIFACTS_DIR}/oaax-intel-toolchain.tar"
 
 echo ""
 echo "========================================="
