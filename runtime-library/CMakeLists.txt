@@ -202,15 +202,17 @@ if(MSVC)
     ws2_32 bcrypt
   )
 
-  # Copy OpenVINO DLLs if found (archive layout: bin/intel64/Release/)
-  file(GLOB OPENVINO_DLLS "${OPENVINO_BIN_DIR}/*.dll")
-  if(OPENVINO_DLLS)
-    add_custom_command(TARGET RuntimeLibrary POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      ${OPENVINO_DLLS}
-      "$<TARGET_FILE_DIR:RuntimeLibrary>/"
-    )
-  endif()
+  # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
+  # into the output directory alongside RuntimeLibrary.dll.
+  # Done at build time via PowerShell so the archive must exist before building.
+  set(OPENVINO_TBB_BIN_DIR "${OPENVINO_DIR}/3rdparty/tbb/bin")
+  add_custom_command(TARGET RuntimeLibrary POST_BUILD
+    COMMAND PowerShell -NoProfile -Command
+      "Get-ChildItem '${OPENVINO_BIN_DIR}' -Filter *.dll | Where-Object { $_.Name -notmatch 'openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend' } | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
+    COMMAND PowerShell -NoProfile -Command
+      "Get-ChildItem '${OPENVINO_TBB_BIN_DIR}' -Filter *.dll | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
+    VERBATIM
+  )
 else()
   target_link_libraries(RuntimeLibrary PUBLIC
     -Wl,--start-group
