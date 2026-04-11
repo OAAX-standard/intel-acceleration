@@ -38,9 +38,8 @@
  * |---------------|--------|----------------|--------------------------------------------------|
  * | `device_type` | string | `"CPU"`        | Target device: `"CPU"`, `"GPU"`,
  * `"NPU"`         | | `perf_hint`   | string | `"latency"`    | `"latency"`,
- * `"throughput"`, `"cumulative_throughput"` | | `precision`   | string |
- * `"FP32"`       | Informational only; actual precision set at conversion | |
- * `log_level`   | int    | `2` (info)     | spdlog level: 0=trace … 6=off | |
+ * `"throughput"`, `"cumulative_throughput"` | | `log_level`   | int    | `2`
+ * (info)     | spdlog level: 0=trace … 6=off                            | |
  * `log_file`    | string | `"runtime.log"`| Path to the log file |
  *
  * @param length  Number of key-value pairs.

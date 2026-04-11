@@ -95,7 +95,6 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 |-----|---------|-------|
 | `device_type` | `"CPU"` | `"CPU"`, `"GPU"`, `"NPU"` |
 | `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS` |
-| `precision` | `"FP32"` | Informational only |
 | `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |
 

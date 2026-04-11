@@ -110,7 +110,6 @@ std::shared_ptr<spdlog::logger> logger;
 static int log_level = spdlog::level::info;
 static string log_file = "runtime.log";
 static string device_type = "CPU";
-static string precision = "FP32";
 static string perf_hint = "latency";
 
 // Last error message returned by runtime_error_message().
@@ -133,8 +132,6 @@ extern "C" int runtime_initialization_with_args(int length, char **keys,
       log_file = string(static_cast<char *>(values[i]));
     else if (key == "device_type")
       device_type = string(static_cast<char *>(values[i]));
-    else if (key == "precision")
-      precision = string(static_cast<char *>(values[i]));
     else if (key == "perf_hint") {
       string val = string(static_cast<char *>(values[i]));
       if (val == "latency" || val == "throughput" ||
@@ -170,7 +167,6 @@ extern "C" int runtime_initialization() {
     logger->info("  log_level: {}", log_level);
     logger->info("  log_file: {}", log_file);
     logger->info("  device_type: {}", device_type);
-    logger->info("  precision: {}", precision);
     logger->info("  perf_hint: {}", perf_hint);
 
     log_available_devices();
