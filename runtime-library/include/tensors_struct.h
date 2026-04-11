@@ -11,85 +11,99 @@ extern "C" {
 
 // Tensor data types matching OAAX standard
 typedef enum {
-    DATA_TYPE_FLOAT = 0,
-    DATA_TYPE_UINT8 = 1,
-    DATA_TYPE_INT8 = 2,
-    DATA_TYPE_UINT16 = 3,
-    DATA_TYPE_INT16 = 4,
-    DATA_TYPE_INT32 = 5,
-    DATA_TYPE_INT64 = 6,
-    DATA_TYPE_BOOL = 7,
-    DATA_TYPE_DOUBLE = 8,
-    DATA_TYPE_UINT32 = 9,
-    DATA_TYPE_UINT64 = 10,
-    DATA_TYPE_FLOAT16 = 11
+  DATA_TYPE_FLOAT = 0,
+  DATA_TYPE_UINT8 = 1,
+  DATA_TYPE_INT8 = 2,
+  DATA_TYPE_UINT16 = 3,
+  DATA_TYPE_INT16 = 4,
+  DATA_TYPE_INT32 = 5,
+  DATA_TYPE_INT64 = 6,
+  DATA_TYPE_BOOL = 7,
+  DATA_TYPE_DOUBLE = 8,
+  DATA_TYPE_UINT32 = 9,
+  DATA_TYPE_UINT64 = 10,
+  DATA_TYPE_FLOAT16 = 11
 } tensor_data_type;
 
 // Struct to hold multiple tensors
 typedef struct {
-    size_t num_tensors;           // Number of tensors
-    char **names;                  // Array of tensor names
-    size_t *ranks;                 // Array of tensor ranks (number of dimensions)
-    size_t **shapes;               // Array of shape arrays (each shape is an array of sizes)
-    tensor_data_type *data_types;  // Array of data types
-    void **data;                   // Array of data pointers
+  size_t num_tensors;  // Number of tensors
+  char **names;        // Array of tensor names
+  size_t *ranks;       // Array of tensor ranks (number of dimensions)
+  size_t **shapes;  // Array of shape arrays (each shape is an array of sizes)
+  tensor_data_type *data_types;  // Array of data types
+  void **data;                   // Array of data pointers
 } tensors_struct;
 
 // Get byte size for a given data type
 static inline int get_data_type_byte_size(tensor_data_type type) {
-    switch (type) {
-        case DATA_TYPE_FLOAT: return 4;
-        case DATA_TYPE_UINT8: return 1;
-        case DATA_TYPE_INT8: return 1;
-        case DATA_TYPE_UINT16: return 2;
-        case DATA_TYPE_INT16: return 2;
-        case DATA_TYPE_INT32: return 4;
-        case DATA_TYPE_INT64: return 8;
-        case DATA_TYPE_BOOL: return 1;
-        case DATA_TYPE_DOUBLE: return 8;
-        case DATA_TYPE_UINT32: return 4;
-        case DATA_TYPE_UINT64: return 8;
-        case DATA_TYPE_FLOAT16: return 2;
-        default: return 0;
-    }
+  switch (type) {
+    case DATA_TYPE_FLOAT:
+      return 4;
+    case DATA_TYPE_UINT8:
+      return 1;
+    case DATA_TYPE_INT8:
+      return 1;
+    case DATA_TYPE_UINT16:
+      return 2;
+    case DATA_TYPE_INT16:
+      return 2;
+    case DATA_TYPE_INT32:
+      return 4;
+    case DATA_TYPE_INT64:
+      return 8;
+    case DATA_TYPE_BOOL:
+      return 1;
+    case DATA_TYPE_DOUBLE:
+      return 8;
+    case DATA_TYPE_UINT32:
+      return 4;
+    case DATA_TYPE_UINT64:
+      return 8;
+    case DATA_TYPE_FLOAT16:
+      return 2;
+    default:
+      return 0;
+  }
 }
 
 // Allocate tensors_struct with given number of tensors
-static inline tensors_struct* allocate_tensors_struct(size_t num_tensors) {
-    tensors_struct* ts = (tensors_struct*)malloc(sizeof(tensors_struct));
-    if (!ts) return NULL;
+static inline tensors_struct *allocate_tensors_struct(size_t num_tensors) {
+  tensors_struct *ts = (tensors_struct *)malloc(sizeof(tensors_struct));
+  if (!ts) return NULL;
 
-    ts->num_tensors = num_tensors;
-    ts->names = (char**)calloc(num_tensors, sizeof(char*));
-    ts->ranks = (size_t*)calloc(num_tensors, sizeof(size_t));
-    ts->shapes = (size_t**)calloc(num_tensors, sizeof(size_t*));
-    ts->data_types = (tensor_data_type*)calloc(num_tensors, sizeof(tensor_data_type));
-    ts->data = (void**)calloc(num_tensors, sizeof(void*));
+  ts->num_tensors = num_tensors;
+  ts->names = (char **)calloc(num_tensors, sizeof(char *));
+  ts->ranks = (size_t *)calloc(num_tensors, sizeof(size_t));
+  ts->shapes = (size_t **)calloc(num_tensors, sizeof(size_t *));
+  ts->data_types =
+      (tensor_data_type *)calloc(num_tensors, sizeof(tensor_data_type));
+  ts->data = (void **)calloc(num_tensors, sizeof(void *));
 
-    return ts;
+  return ts;
 }
 
 // Free tensors_struct and all its contents
-static inline void deep_free_tensors_struct(tensors_struct* ts) {
-    if (!ts) return;
+static inline void deep_free_tensors_struct(tensors_struct *ts) {
+  if (!ts) return;
 
-    for (size_t i = 0; i < ts->num_tensors; i++) {
-        if (ts->names && ts->names[i]) free(ts->names[i]);
-        if (ts->shapes && ts->shapes[i]) free(ts->shapes[i]);
-        if (ts->data && ts->data[i]) free(ts->data[i]);
-    }
+  for (size_t i = 0; i < ts->num_tensors; i++) {
+    if (ts->names && ts->names[i]) free(ts->names[i]);
+    if (ts->shapes && ts->shapes[i]) free(ts->shapes[i]);
+    if (ts->data && ts->data[i]) free(ts->data[i]);
+  }
 
-    if (ts->names) free(ts->names);
-    if (ts->ranks) free(ts->ranks);
-    if (ts->shapes) free(ts->shapes);
-    if (ts->data_types) free(ts->data_types);
-    if (ts->data) free(ts->data);
+  if (ts->names) free(ts->names);
+  if (ts->ranks) free(ts->ranks);
+  if (ts->shapes) free(ts->shapes);
+  if (ts->data_types) free(ts->data_types);
+  if (ts->data) free(ts->data);
 
-    free(ts);
+  free(ts);
 }
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // TENSORS_STRUCT_H
+#endif  // TENSORS_STRUCT_H

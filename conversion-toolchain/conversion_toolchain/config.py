@@ -1,9 +1,9 @@
 """
 Configuration parser for model optimization settings
 """
+
 import json
-from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 
 class OptimizationConfig:
@@ -18,17 +18,13 @@ class OptimizationConfig:
                 "mode": "int8",
                 "calibration_data": "calibration/",
                 "preset": "mixed",
-                "subset_size": 300
-            }
+                "subset_size": 300,
+            },
         },
-        "advanced": {
-            "input_shape": None,
-            "input_names": None,
-            "output_names": None
-        }
+        "advanced": {"input_shape": None, "input_names": None, "output_names": None},
     }
 
-    def __init__(self, config_dict: Optional[Dict[str, Any]] = None):
+    def __init__(self, config_dict: dict[str, Any] | None = None):
         """
         Initialize configuration from dictionary
 
@@ -45,7 +41,7 @@ class OptimizationConfig:
         self._validate()
 
     @classmethod
-    def from_file(cls, config_path: str) -> 'OptimizationConfig':
+    def from_file(cls, config_path: str) -> "OptimizationConfig":
         """
         Load configuration from JSON file
 
@@ -55,16 +51,16 @@ class OptimizationConfig:
         Returns:
             OptimizationConfig instance
         """
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config_dict = json.load(f)
         return cls(config_dict)
 
     @classmethod
-    def from_default(cls) -> 'OptimizationConfig':
+    def from_default(cls) -> "OptimizationConfig":
         """Create configuration with all defaults"""
         return cls(None)
 
-    def _merge_configs(self, default: Dict, user: Dict) -> Dict:
+    def _merge_configs(self, default: dict, user: dict) -> dict:
         """Recursively merge user config with defaults"""
         result = default.copy()
 
@@ -123,25 +119,25 @@ class OptimizationConfig:
         """Get calibration subset size"""
         return self.config["optimization"]["quantization"]["subset_size"]
 
-    def get_input_shape(self) -> Optional[list]:
+    def get_input_shape(self) -> list | None:
         """Get input shape override"""
         return self.config["advanced"]["input_shape"]
 
-    def get_input_names(self) -> Optional[list]:
+    def get_input_names(self) -> list | None:
         """Get input tensor names"""
         return self.config["advanced"]["input_names"]
 
-    def get_output_names(self) -> Optional[list]:
+    def get_output_names(self) -> list | None:
         """Get output tensor names"""
         return self.config["advanced"]["output_names"]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary"""
         return self.config.copy()
 
     def to_json(self, filepath: str):
         """Save configuration to JSON file"""
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(self.config, f, indent=2)
 
     def __repr__(self) -> str:

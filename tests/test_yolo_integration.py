@@ -9,10 +9,12 @@ Run via Stage 1:
 Or directly:
     pytest tests/test_yolo_integration.py -v
 """
-import pytest
+
+from pathlib import Path
+
 import numpy as np
 import openvino as ov
-from pathlib import Path
+import pytest
 
 from tests.models import TEST_MODELS
 
@@ -40,6 +42,7 @@ def _get(compiled_yolo_models, model_name, variant):
 
 # ── IR file presence ──────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
 @pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_ir_files_exist(compiled_yolo_models, model_name, variant):
@@ -50,6 +53,7 @@ def test_ir_files_exist(compiled_yolo_models, model_name, variant):
 
 
 # ── OpenVINO loading ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
 @pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
@@ -63,6 +67,7 @@ def test_ir_loads_in_openvino(compiled_yolo_models, model_name, variant):
 
 # ── Output shape ──────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
 @pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_output_shape(compiled_yolo_models, model_name, variant):
@@ -70,11 +75,15 @@ def test_output_shape(compiled_yolo_models, model_name, variant):
     xml = _get(compiled_yolo_models, model_name, variant)
     info = TEST_MODELS[model_name]
     output = _infer(xml, model_name)
-    assert output.shape == (1, info["output_channels"], info["output_anchors"]), \
-        f"Expected (1, {info['output_channels']}, {info['output_anchors']}), got {output.shape}"
+    assert output.shape == (
+        1,
+        info["output_channels"],
+        info["output_anchors"],
+    ), f"Expected (1, {info['output_channels']}, {info['output_anchors']}), got {output.shape}"
 
 
 # ── Numerical sanity ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
 @pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
@@ -98,13 +107,15 @@ def test_bbox_coords_in_range(compiled_yolo_models, model_name):
 
 # ── Model size: compressed variants must be smaller than FP32 ─────────────────
 
+
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
 def test_fp16_bin_smaller_than_fp32(compiled_yolo_models, model_name):
     """FP16 .bin is smaller than FP32 .bin."""
     fp32 = compiled_yolo_models[(model_name, "FP32")].with_suffix(".bin")
     fp16 = compiled_yolo_models[(model_name, "FP16")].with_suffix(".bin")
-    assert fp16.stat().st_size < fp32.stat().st_size, \
-        f"FP16 ({fp16.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"
+    assert (
+        fp16.stat().st_size < fp32.stat().st_size
+    ), f"FP16 ({fp16.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"
 
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS)
@@ -113,5 +124,6 @@ def test_int8_bin_smaller_than_fp32(compiled_yolo_models, model_name):
     xml = _get(compiled_yolo_models, model_name, "INT8")
     fp32 = compiled_yolo_models[(model_name, "FP32")].with_suffix(".bin")
     int8 = xml.with_suffix(".bin")
-    assert int8.stat().st_size < fp32.stat().st_size, \
-        f"INT8 ({int8.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"
+    assert (
+        int8.stat().st_size < fp32.stat().st_size
+    ), f"INT8 ({int8.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"

@@ -5,27 +5,31 @@ compiled_yolo_models converts all YOLO variants (FP32/FP16/INT8) once per
 session, caching to tests/compiled_models/. Stage 1 populates this cache;
 Stage 2 reads from it without re-converting.
 """
+
 import zipfile
-import pytest
 from pathlib import Path
 
-from conversion_toolchain.utils import convert_to_ir
+import pytest
+
 from conversion_toolchain.config import OptimizationConfig
 from conversion_toolchain.logger import Logs
 from conversion_toolchain.quantization import is_nncf_available
-from tests.models import download_model, download_calibration_images
+from conversion_toolchain.utils import convert_to_ir
+from tests.models import download_calibration_images, download_model
 
 COMPILED_DIR = Path(__file__).parent / "compiled_models"
 
 _VARIANTS = {
     "FP32": OptimizationConfig({"optimization": {"fp16_compression": False}}),
     "FP16": OptimizationConfig({"optimization": {"fp16_compression": True}}),
-    "INT8": OptimizationConfig({
-        "optimization": {
-            "fp16_compression": False,
-            "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
+    "INT8": OptimizationConfig(
+        {
+            "optimization": {
+                "fp16_compression": False,
+                "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
+            }
         }
-    }),
+    ),
 }
 
 YOLO_MODELS = ["yolov8n", "yolo11n"]
@@ -50,14 +54,12 @@ def compiled_yolo_models(calibration_dir):
     try:
         import ultralytics  # noqa: F401
     except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration",
-                    allow_module_level=False)
+        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
 
     onnx_dir = COMPILED_DIR / "onnx"
     onnx_dir.mkdir(parents=True, exist_ok=True)
 
-    variants = {k: v for k, v in _VARIANTS.items()
-                if k != "INT8" or calibration_dir is not None}
+    variants = {k: v for k, v in _VARIANTS.items() if k != "INT8" or calibration_dir is not None}
 
     result = {}
     for model_name in YOLO_MODELS:
@@ -71,7 +73,10 @@ def compiled_yolo_models(calibration_dir):
             out_dir.mkdir(parents=True, exist_ok=True)
             logs = Logs()
             zip_path = convert_to_ir(
-                onnx, str(out_dir / "zip"), logs, config,
+                onnx,
+                str(out_dir / "zip"),
+                logs,
+                config,
                 calibration_dir if variant == "INT8" else None,
             )
             with zipfile.ZipFile(zip_path) as z:

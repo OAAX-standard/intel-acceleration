@@ -6,8 +6,8 @@ Creates a zip file containing just the ONNX model (with default FP16 compression
 For quantization, use create_quantization_bundle.py instead.
 """
 
-import zipfile
 import argparse
+import zipfile
 from pathlib import Path
 
 
@@ -26,33 +26,24 @@ def create_simple_bundle(onnx_model_path: str, output_bundle: str):
 
     print(f"Creating simple bundle: {output_bundle}")
 
-    with zipfile.ZipFile(output_bundle, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    with zipfile.ZipFile(output_bundle, "w", zipfile.ZIP_DEFLATED) as zipf:
         # Add ONNX model
         zipf.write(onnx_path, arcname="model.onnx")
         print(f"  Added: {onnx_path.name} -> model.onnx")
 
     print(f"\n✅ Bundle created successfully: {output_bundle}")
-    print(f"\nThis bundle will use default settings:")
-    print(f"  - FP16 compression: ✅ Enabled")
-    print(f"  - INT8 quantization: ❌ Disabled")
-    print(f"\nTo convert:")
+    print("\nThis bundle will use default settings:")
+    print("  - FP16 compression: ✅ Enabled")
+    print("  - INT8 quantization: ❌ Disabled")
+    print("\nTo convert:")
     print(f"  conversion_toolchain {output_bundle} ./output")
-    print(f"\nTo customize settings, add a config.json to the zip or use create_quantization_bundle.py")
+    print("\nTo customize settings, add a config.json to the zip or use create_quantization_bundle.py")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Create a simple ONNX model bundle for conversion"
-    )
-    parser.add_argument(
-        "onnx_model",
-        help="Path to ONNX model file"
-    )
-    parser.add_argument(
-        "-o", "--output",
-        default=None,
-        help="Output bundle path (default: <model_name>_bundle.zip)"
-    )
+    parser = argparse.ArgumentParser(description="Create a simple ONNX model bundle for conversion")
+    parser.add_argument("onnx_model", help="Path to ONNX model file")
+    parser.add_argument("-o", "--output", default=None, help="Output bundle path (default: <model_name>_bundle.zip)")
 
     args = parser.parse_args()
 

@@ -1,25 +1,28 @@
 """
 Model quantization using NNCF (Neural Network Compression Framework)
 """
-import numpy as np
+
 from pathlib import Path
-from typing import List, Optional
-from PIL import Image
+
+import numpy as np
 import openvino as ov
+from PIL import Image
 
 # Patch: OpenVINO 2024.6 moved Node out of the top-level namespace into
 # openvino.runtime. NNCF 2.14 references ov.Node in class-level annotations
 # (evaluated eagerly at import time), so we restore the alias before NNCF loads.
 # OpenVINO 2026.1+ restores ov.Node directly, so the patch is a no-op there.
-if not hasattr(ov, 'Node'):
+if not hasattr(ov, "Node"):
     try:
         import openvino.runtime as _ov_runtime
+
         ov.Node = _ov_runtime.Node
     except ModuleNotFoundError:
         pass
 
 try:
     import nncf
+
     NNCF_AVAILABLE = True
 except ImportError:
     NNCF_AVAILABLE = False
@@ -28,9 +31,9 @@ except ImportError:
 class CalibrationDataLoader:
     """Loads and preprocesses calibration images"""
 
-    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
-    def __init__(self, calibration_dir: str, input_shape: Optional[List[int]] = None):
+    def __init__(self, calibration_dir: str, input_shape: list[int] | None = None):
         """
         Initialize calibration data loader
 
@@ -46,7 +49,7 @@ class CalibrationDataLoader:
         if not self.image_files:
             raise ValueError(f"No calibration images found in {calibration_dir}")
 
-    def _find_images(self) -> List[Path]:
+    def _find_images(self) -> list[Path]:
         """Find all supported image files in calibration directory"""
         images = []
         for ext in self.SUPPORTED_FORMATS:
@@ -65,7 +68,7 @@ class CalibrationDataLoader:
             Preprocessed image as numpy array
         """
         # Load image
-        img = Image.open(image_path).convert('RGB')
+        img = Image.open(image_path).convert("RGB")
 
         # Determine target size
         if self.input_shape and len(self.input_shape) == 4:
@@ -120,11 +123,7 @@ class CalibrationDataLoader:
 
 
 def quantize_model(
-    model: ov.Model,
-    calibration_dir: str,
-    preset: str = "mixed",
-    subset_size: int = 300,
-    logs = None
+    model: ov.Model, calibration_dir: str, preset: str = "mixed", subset_size: int = 300, logs=None
 ) -> ov.Model:
     """
     Quantize OpenVINO model to INT8 using NNCF
@@ -144,19 +143,16 @@ def quantize_model(
         ValueError: If calibration data is invalid
     """
     if not NNCF_AVAILABLE:
-        error_msg = (
-            "NNCF is not installed. Install it with: uv sync --extra quantization"
-        )
+        error_msg = "NNCF is not installed. Install it with: uv sync --extra quantization"
         if logs:
             logs.add_message("Quantization Error", {"Error": error_msg})
         raise ImportError(error_msg)
 
     if logs:
-        logs.add_message("Starting INT8 quantization", {
-            "Preset": preset,
-            "Calibration directory": calibration_dir,
-            "Subset size": subset_size
-        })
+        logs.add_message(
+            "Starting INT8 quantization",
+            {"Preset": preset, "Calibration directory": calibration_dir, "Subset size": subset_size},
+        )
 
     # Get model input shape
     input_shape = None
@@ -169,19 +165,17 @@ def quantize_model(
     try:
         data_loader = CalibrationDataLoader(calibration_dir, input_shape)
         if logs:
-            logs.add_message("Calibration data loaded", {
-                "Total images found": len(data_loader),
-                "Images to use": min(subset_size, len(data_loader))
-            })
+            logs.add_message(
+                "Calibration data loaded",
+                {"Total images found": len(data_loader), "Images to use": min(subset_size, len(data_loader))},
+            )
     except Exception as e:
         if logs:
             logs.add_message("Failed to load calibration data", {"Error": str(e)})
         raise
 
     # Create calibration dataset
-    calibration_dataset = nncf.Dataset(
-        data_loader.get_data_generator(subset_size)
-    )
+    calibration_dataset = nncf.Dataset(data_loader.get_data_generator(subset_size))
 
     # Map preset to NNCF preset
     preset_mapping = {
@@ -205,9 +199,7 @@ def quantize_model(
         )
 
         if logs:
-            logs.add_message("INT8 quantization completed successfully", {
-                "Preset used": preset
-            })
+            logs.add_message("INT8 quantization completed successfully", {"Preset used": preset})
 
         return quantized_model
 

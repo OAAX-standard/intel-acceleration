@@ -12,7 +12,8 @@
 
 /**
  * @file runtime_core.hpp
- * @brief OAAX public C API for OpenVINO-based inference on Intel CPU / GPU / NPU.
+ * @brief OAAX public C API for OpenVINO-based inference on Intel CPU / GPU /
+ * NPU.
  *
  * Typical call sequence:
  * @code
@@ -33,20 +34,23 @@
  * @brief Initialize the runtime with configuration key-value pairs.
  *
  * Supported keys:
- * | Key           | Type   | Default        | Description                                      |
+ * | Key           | Type   | Default        | Description |
  * |---------------|--------|----------------|--------------------------------------------------|
- * | `device_type` | string | `"CPU"`        | Target device: `"CPU"`, `"GPU"`, `"NPU"`         |
- * | `perf_hint`   | string | `"latency"`    | `"latency"`, `"throughput"`, `"cumulative_throughput"` |
- * | `precision`   | string | `"FP32"`       | Informational only; actual precision set at conversion |
- * | `log_level`   | int    | `2` (info)     | spdlog level: 0=trace … 6=off                    |
- * | `log_file`    | string | `"runtime.log"`| Path to the log file                             |
+ * | `device_type` | string | `"CPU"`        | Target device: `"CPU"`, `"GPU"`,
+ * `"NPU"`         | | `perf_hint`   | string | `"latency"`    | `"latency"`,
+ * `"throughput"`, `"cumulative_throughput"` | | `precision`   | string |
+ * `"FP32"`       | Informational only; actual precision set at conversion | |
+ * `log_level`   | int    | `2` (info)     | spdlog level: 0=trace … 6=off | |
+ * `log_file`    | string | `"runtime.log"`| Path to the log file |
  *
  * @param length  Number of key-value pairs.
  * @param keys    Array of null-terminated key strings.
  * @param values  Array of value pointers (cast to char* for string/int values).
  * @return 0 on success, -1 on failure.
  */
-extern "C" EXPOSE_FUNCTION int runtime_initialization_with_args(int length, char **keys, void **values);
+extern "C" EXPOSE_FUNCTION int runtime_initialization_with_args(int length,
+                                                                char **keys,
+                                                                void **values);
 
 /**
  * @brief Initialize the runtime with default configuration.
@@ -111,7 +115,8 @@ extern "C" EXPOSE_FUNCTION int send_input(tensors_struct *input_tensors);
 extern "C" EXPOSE_FUNCTION int receive_output(tensors_struct **output_tensors);
 
 /**
- * @brief Return an output buffer received via receive_output() back to the pool.
+ * @brief Return an output buffer received via receive_output() back to the
+ * pool.
  *
  * Use this instead of deep_free_tensors_struct() to enable zero-copy buffer
  * reuse on the hot path. The buffer will be recycled into the pre-allocated
@@ -162,5 +167,4 @@ extern "C" EXPOSE_FUNCTION const char *runtime_version();
  */
 extern "C" EXPOSE_FUNCTION const char *runtime_name();
 
-
-#endif // RUNTIME_CORE_HPP
+#endif  // RUNTIME_CORE_HPP

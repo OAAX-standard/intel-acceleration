@@ -8,14 +8,16 @@ Prerequisites:
 - Docker installed and running
 - Docker image built: IMAGE_NAME=oaax-intel-toolchain bash conversion-toolchain/build-toolchain.sh
 """
-import pytest
+
+import json
+import shutil
 import subprocess
 import tempfile
-import shutil
-import zipfile
-import json
-from pathlib import Path
 import time
+import zipfile
+from pathlib import Path
+
+import pytest
 
 from tests.models import download_model
 
@@ -27,21 +29,12 @@ def docker_available():
     """Check if Docker is available and image is built"""
     try:
         # Check Docker is running
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=5
-        )
+        result = subprocess.run(["docker", "info"], capture_output=True, timeout=5)
         if result.returncode != 0:
             return False
 
         # Check if image exists
-        result = subprocess.run(
-            ["docker", "images", "-q", DOCKER_IMAGE],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
+        result = subprocess.run(["docker", "images", "-q", DOCKER_IMAGE], capture_output=True, text=True, timeout=5)
         return bool(result.stdout.strip())
     except Exception:
         return False
@@ -66,11 +59,7 @@ def temp_workspace():
     input_dir.mkdir()
     output_dir.mkdir()
 
-    yield {
-        "workspace": Path(workspace),
-        "input": input_dir,
-        "output": output_dir
-    }
+    yield {"workspace": Path(workspace), "input": input_dir, "output": output_dir}
 
     # Cleanup
     shutil.rmtree(workspace)
@@ -94,20 +83,13 @@ class TestDockerBasics:
 
     def test_docker_image_exists(self, docker_check):
         """Test that Docker image exists"""
-        result = subprocess.run(
-            ["docker", "images", "-q", DOCKER_IMAGE],
-            capture_output=True,
-            text=True
-        )
+        result = subprocess.run(["docker", "images", "-q", DOCKER_IMAGE], capture_output=True, text=True)
         assert result.stdout.strip(), f"Docker image {DOCKER_IMAGE} not found"
 
     def test_docker_help_command(self, docker_check):
         """Test that --help works"""
         result = subprocess.run(
-            ["docker", "run", "--rm", DOCKER_IMAGE, "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30
+            ["docker", "run", "--rm", DOCKER_IMAGE, "--help"], capture_output=True, text=True, timeout=30
         )
         assert result.returncode == 0, "Help command failed"
         assert "INPUT_ZIP" in result.stdout or "input_zip" in result.stdout
@@ -115,12 +97,7 @@ class TestDockerBasics:
 
     def test_docker_version_info(self, docker_check):
         """Test Docker image labels"""
-        result = subprocess.run(
-            ["docker", "inspect", DOCKER_IMAGE],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        result = subprocess.run(["docker", "inspect", DOCKER_IMAGE], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
 
         # Check that we have labels
@@ -135,18 +112,27 @@ class TestDockerConversion:
         """Test basic model conversion through Docker"""
         # Create input bundle
         bundle_path = temp_workspace["input"] / "model.zip"
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.write(sample_model, arcname="model.onnx")
 
         # Run conversion
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/model.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/model.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         # Check success
         assert result.returncode == 0, f"Conversion failed: {result.stderr}"
@@ -173,29 +159,34 @@ class TestDockerConversion:
         """Test conversion with FP16 compression"""
         # Create bundle with config
         bundle_path = temp_workspace["input"] / "model_fp16.zip"
-        config = {
-            "optimization": {
-                "fp16_compression": True
-            }
-        }
+        config = {"optimization": {"fp16_compression": True}}
 
         config_file = temp_workspace["input"] / "config.json"
-        with open(config_file, 'w') as f:
+        with open(config_file, "w") as f:
             json.dump(config, f)
 
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.write(sample_model, arcname="model.onnx")
             zipf.write(config_file, arcname="config.json")
 
         # Run conversion
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/model_fp16.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/model_fp16.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         assert result.returncode == 0, f"Conversion failed: {result.stderr}"
 
@@ -209,29 +200,34 @@ class TestDockerConversion:
         """Test conversion without compression (FP32)"""
         # Create bundle with config disabling FP16
         bundle_path = temp_workspace["input"] / "model_fp32.zip"
-        config = {
-            "optimization": {
-                "fp16_compression": False
-            }
-        }
+        config = {"optimization": {"fp16_compression": False}}
 
         config_file = temp_workspace["input"] / "config.json"
-        with open(config_file, 'w') as f:
+        with open(config_file, "w") as f:
             json.dump(config, f)
 
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.write(sample_model, arcname="model.onnx")
             zipf.write(config_file, arcname="config.json")
 
         # Run conversion
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/model_fp32.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/model_fp32.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         assert result.returncode == 0, f"Conversion failed: {result.stderr}"
 
@@ -245,14 +241,23 @@ class TestDockerErrorHandling:
 
     def test_nonexistent_input(self, docker_check, temp_workspace):
         """Test error when input file doesn't exist"""
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/nonexistent.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/nonexistent.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
         # Should fail with exit code 1
         assert result.returncode == 1, "Should fail for nonexistent file"
@@ -262,17 +267,26 @@ class TestDockerErrorHandling:
         """Test error with invalid zip file"""
         # Create invalid zip
         invalid_zip = temp_workspace["input"] / "invalid.zip"
-        with open(invalid_zip, 'w') as f:
+        with open(invalid_zip, "w") as f:
             f.write("Not a valid zip file")
 
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/invalid.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/invalid.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
         # Should fail with exit code 2
         assert result.returncode == 2, "Should fail for invalid zip"
@@ -282,17 +296,26 @@ class TestDockerErrorHandling:
         """Test error when zip has no ONNX model"""
         # Create zip without model
         bundle_path = temp_workspace["input"] / "no_model.zip"
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.writestr("readme.txt", "No model here")
 
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/no_model.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/no_model.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
         # Should fail with exit code 2
         assert result.returncode == 2, "Should fail when no model found"
@@ -306,20 +329,29 @@ class TestDockerPerformance:
         """Test that conversion completes within reasonable time"""
         # Create input bundle
         bundle_path = temp_workspace["input"] / "model.zip"
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.write(sample_model, arcname="model.onnx")
 
         # Measure time
         start_time = time.time()
 
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{temp_workspace['output']}:/output",
-            DOCKER_IMAGE,
-            "/input/model.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{temp_workspace['output']}:/output",
+                DOCKER_IMAGE,
+                "/input/model.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         elapsed = time.time() - start_time
 
@@ -336,21 +368,30 @@ class TestDockerVolumes:
         """Test that output directory is used correctly"""
         # Create input bundle
         bundle_path = temp_workspace["input"] / "model.zip"
-        with zipfile.ZipFile(bundle_path, 'w') as zipf:
+        with zipfile.ZipFile(bundle_path, "w") as zipf:
             zipf.write(sample_model, arcname="model.onnx")
 
         # Use subdirectory for output
         sub_output = temp_workspace["output"] / "subdir"
         sub_output.mkdir()
 
-        result = subprocess.run([
-            "docker", "run", "--rm",
-            "-v", f"{temp_workspace['input']}:/input",
-            "-v", f"{sub_output}:/output",
-            DOCKER_IMAGE,
-            "/input/model.zip",
-            "/output"
-        ], capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{temp_workspace['input']}:/input",
+                "-v",
+                f"{sub_output}:/output",
+                DOCKER_IMAGE,
+                "/input/model.zip",
+                "/output",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
 
         assert result.returncode == 0, f"Conversion failed: {result.stderr}"
 
@@ -359,5 +400,5 @@ class TestDockerVolumes:
         assert len(output_files) >= 1, "No output in subdirectory"
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v', '--tb=short'])
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "--tb=short"])
