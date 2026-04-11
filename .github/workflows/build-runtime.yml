@@ -241,6 +241,9 @@ jobs:
           s3cmd get "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" /tmp/library.tar.gz
           tar xzf /tmp/library.tar.gz -C runtime-library/build/
 
+      - name: Install uv
+        run: pip install uv
+
       - name: Stage 1 — convert models and run toolchain tests
         run: bash scripts/stage1_compile.sh
 
