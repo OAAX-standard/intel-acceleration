@@ -37,3 +37,10 @@ foreach(dll ${tbb_dlls})
         file(COPY "${dll}" DESTINATION "${DST_DIR}")
     endif()
 endforeach()
+
+# Copy Visual C++ runtime DLLs required on machines without the redistributable.
+get_filename_component(_runtime_lib_dir "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+file(GLOB _vcrt_dlls "${_runtime_lib_dir}/deps/windows-runtime/*.dll")
+foreach(dll ${_vcrt_dlls})
+    file(COPY "${dll}" DESTINATION "${DST_DIR}")
+endforeach()
