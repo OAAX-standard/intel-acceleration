@@ -59,9 +59,10 @@ bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.
 ### Individual pytest suites
 
 ```bash
-pytest tests/test_conversion.py -v       # toolchain unit tests
-pytest tests/test_yolo_integration.py -v # YOLO IR validation (uses cached models)
-pytest tests/test_docker.py -v           # Docker tests (image must be built first)
+pytest tests/test_conversion.py -v            # toolchain unit tests
+pytest tests/test_yolo_integration.py -v      # YOLO IR validation (uses cached models)
+pytest tests/test_quantization_accuracy.py -v # INT8/FP16 accuracy vs FP32 (requires compiled models)
+pytest tests/test_docker.py -v                # Docker tests (image must be built first)
 ```
 
 ### C++ runtime smoke tests
