@@ -220,9 +220,18 @@ else()
     -Wl,--end-group
   )
 
-  # Copy OpenVINO shared libraries
+  # Copy only the OpenVINO libs needed at runtime: core, device plugins,
+  # IR frontend, and threading libs. Unused model-format frontends are excluded
+  # to keep the package lean — the runtime only loads OpenVINO IR (.xml) files.
   add_custom_command(TARGET RuntimeLibrary POST_BUILD
-    COMMAND cp -P ${OPENVINO_LIB_DIR}/*.so* ${CMAKE_CURRENT_BINARY_DIR}/ || true
+    COMMAND find ${OPENVINO_LIB_DIR} -maxdepth 1 -name "*.so*"
+      "!" -name "libopenvino_onnx_frontend*"
+      "!" -name "libopenvino_pytorch_frontend*"
+      "!" -name "libopenvino_tensorflow_frontend*"
+      "!" -name "libopenvino_tensorflow_lite_frontend*"
+      "!" -name "libopenvino_paddle_frontend*"
+      "!" -name "libopenvino_jax_frontend*"
+      -exec cp -P {} ${CMAKE_CURRENT_BINARY_DIR}/ ";"
   )
 endif()
 
