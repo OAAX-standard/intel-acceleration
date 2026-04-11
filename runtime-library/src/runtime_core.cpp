@@ -95,8 +95,14 @@ static string device_type = "CPU";
 static string precision = "FP32";
 static string perf_hint = "latency";
 
+// Last error message returned by runtime_error_message().
+static string last_error;
+
 extern "C" int runtime_initialization_with_args(int length, char **keys,
                                                 void **values) {
+  std::vector<string> unknown_args;
+  std::vector<string> bad_perf_hints;
+
   for (int i = 0; i < length; ++i) {
     string key = string(keys[i]);
     if (key == "log_level") {
@@ -116,9 +122,22 @@ extern "C" int runtime_initialization_with_args(int length, char **keys,
       if (val == "latency" || val == "throughput" ||
           val == "cumulative_throughput")
         perf_hint = val;
+      else
+        bad_perf_hints.push_back(val);
+    } else {
+      unknown_args.push_back(key);
     }
   }
-  return runtime_initialization();
+
+  int ret = runtime_initialization();  // sets up logger
+
+  for (const auto &val : bad_perf_hints)
+    logger->warn("Unknown perf_hint value '{}' — keeping default '{}'", val,
+                 perf_hint);
+  for (const auto &k : unknown_args)
+    logger->warn("Unknown runtime argument '{}' — ignored", k);
+
+  return ret;
 }
 
 extern "C" int runtime_initialization() {
@@ -137,7 +156,8 @@ extern "C" int runtime_initialization() {
     logger->info("  perf_hint: {}", perf_hint);
     return 0;
   } catch (const std::exception &e) {
-    logger->error("Error during runtime initialization: {}", e.what());
+    last_error = e.what();
+    logger->error("Runtime initialization failed: {}", last_error);
     return -1;
   }
 }
@@ -171,8 +191,20 @@ extern "C" int runtime_model_loading(const char *model_path) {
       config[ov::hint::performance_mode.name()] =
           ov::hint::PerformanceMode::LATENCY;
 
-    compiled_model = std::make_shared<ov::CompiledModel>(
-        core->compile_model(model, device_type, config));
+    try {
+      compiled_model = std::make_shared<ov::CompiledModel>(
+          core->compile_model(model, device_type, config));
+    } catch (const std::exception &e) {
+      if (device_type != "CPU") {
+        logger->warn("Failed to compile model on {} ({}). Falling back to CPU.",
+                     device_type, e.what());
+        device_type = "CPU";
+        compiled_model = std::make_shared<ov::CompiledModel>(
+            core->compile_model(model, "CPU", config));
+      } else {
+        throw;
+      }
+    }
     logger->debug("Model compiled for device: {} (hint={})", device_type,
                   perf_hint);
 
@@ -273,15 +305,25 @@ extern "C" int runtime_model_loading(const char *model_path) {
 
     return 0;
   } catch (const std::exception &e) {
-    logger->error("Error during model loading: {}", e.what());
+    last_error = e.what();
+    logger->error("Model loading failed: {}", last_error);
     return -1;
   }
 }
 
 extern "C" int send_input(tensors_struct *input_tensors) {
+  if (!compiled_model) {
+    last_error =
+        "send_input called before a model was loaded — call "
+        "runtime_model_loading() first";
+    logger->error("{}", last_error);
+    return -1;
+  }
   logger->debug("Enqueuing input tensors.");
   if (!input_tensors_queue.try_enqueue(input_tensors)) {
-    logger->warn("Failed to enqueue input tensors.");
+    last_error =
+        "Input queue is full — inference is not keeping up with the producer";
+    logger->warn("{}", last_error);
     return -1;
   }
   sem_post(&input_sem);  // wake manager immediately — no 1ms sleep needed
@@ -388,8 +430,10 @@ static void manager_thread_func() {
     }
 
     // Set input tensors (zero-copy: wraps caller's data pointer).
+    size_t failed_tensor = 0;
     try {
       for (size_t i = 0; i < input->num_tensors; ++i) {
+        failed_tensor = i;
         ov::Shape shape;
         for (size_t j = 0; j < input->ranks[i]; ++j)
           shape.push_back(input->shapes[i][j]);
@@ -398,7 +442,10 @@ static void manager_thread_func() {
                                   input->data[i]));
       }
     } catch (const std::exception &e) {
-      logger->error("[manager] set_tensor error on slot {}: {}", idx, e.what());
+      logger->error(
+          "[manager] Failed to set tensor '{}' on slot {} (shape/type "
+          "mismatch?): {}",
+          input->names[failed_tensor], idx, e.what());
       deep_free_tensors_struct(input);
       runtime_return_output(output);
       free_requests.enqueue(idx);
@@ -487,7 +534,7 @@ extern "C" int runtime_destruction() {
 }
 
 extern "C" const char *runtime_error_message() {
-  return "Check the stdout and/or log files for any error message.";
+  return last_error.empty() ? "No error recorded." : last_error.c_str();
 }
 
 extern "C" const char *runtime_version() { return RUNTIME_VERSION; }

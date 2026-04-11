@@ -1,7 +1,20 @@
+import sys
+import zipfile
+
+
+def _fatal(logs, output_dir: str, label: str, error: Exception, hint: str, code: int) -> None:
+    """Log a fatal error, save logs, print a user-friendly message, and exit."""
+    logs.add_message(f"FATAL ERROR: {label}", {"Error": str(error)})
+    logs.save_as_json(f"{output_dir}/logs.json")
+    print(logs)
+    print(f"\nERROR: {error}")
+    print(f"Hint: {hint}")
+    sys.exit(code)
+
+
 def cli():
     import argparse
     import tempfile
-    import zipfile
     from os import makedirs
     from os.path import basename
 
@@ -46,7 +59,7 @@ def cli():
             onnx_path, config_path, calibration_dir = extract_input_bundle(
                 input_zip,
                 temp_extract_dir,
-                logs,  # Pass logs for detailed error tracking
+                logs,
             )
 
             logs.add_message(
@@ -98,48 +111,66 @@ def cli():
             },
         )
 
-        # Print logs to stdout
         print(logs)
-        print("Exiting.")
 
     except FileNotFoundError as e:
-        logs.add_message("FATAL ERROR: File not found", {"Error": str(e)})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nERROR: {e}")
-        exit(1)
+        _fatal(
+            logs,
+            output_dir,
+            "File not found",
+            e,
+            "Ensure the input zip file path is correct and the file exists.",
+            1,
+        )
 
     except zipfile.BadZipFile as e:
-        logs.add_message("FATAL ERROR: Invalid zip archive", {"Error": str(e)})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nERROR: {e}")
-        exit(2)
+        _fatal(
+            logs,
+            output_dir,
+            "Invalid zip archive",
+            e,
+            "The input must be a valid .zip file — not a raw .onnx or a corrupted archive.",
+            2,
+        )
 
     except ValueError as e:
-        logs.add_message("FATAL ERROR: Invalid input", {"Error": str(e)})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nERROR: {e}")
-        exit(2)
+        _fatal(
+            logs,
+            output_dir,
+            "Invalid input",
+            e,
+            "The bundle may be missing model.onnx, or config.json is malformed.",
+            2,
+        )
 
     except RuntimeError as e:
-        logs.add_message("FATAL ERROR: Conversion failed", {"Error": str(e)})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nERROR: {e}")
-        exit(3)
+        _fatal(
+            logs,
+            output_dir,
+            "Conversion failed",
+            e,
+            "The model may contain unsupported ONNX operators. "
+            "Check OpenVINO compatibility or try without quantization.",
+            3,
+        )
 
     except OSError as e:
-        logs.add_message("FATAL ERROR: I/O operation failed", {"Error": str(e)})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nERROR: {e}")
-        exit(4)
+        _fatal(
+            logs,
+            output_dir,
+            "I/O operation failed",
+            e,
+            "Check available disk space and write permissions on the output directory.",
+            4,
+        )
 
     except Exception as e:
-        logs.add_message("FATAL ERROR: Unexpected error", {"Error": str(e), "Type": type(e).__name__})
-        logs.save_as_json(f"{output_dir}/logs.json")
-        print(logs)
-        print(f"\nUNEXPECTED ERROR: {e}")
-        exit(255)
+        _fatal(
+            logs,
+            output_dir,
+            f"Unexpected error ({type(e).__name__})",
+            e,
+            "This is an unhandled error. Please report it at "
+            "https://github.com/OAAX-standard/intel-acceleration/issues",
+            255,
+        )
