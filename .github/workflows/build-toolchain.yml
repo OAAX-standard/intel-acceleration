@@ -2,13 +2,10 @@ name: Build OAAX conversion toolchain
 permissions:
   contents: none
 
+# Toolchain build is now part of build-runtime.yml (unified CI).
+# This file is kept for standalone manual runs only.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   build-toolchain:
