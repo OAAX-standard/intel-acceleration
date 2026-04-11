@@ -153,36 +153,41 @@ int main(int argc, char **argv)
 {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0]
-                  << " <model.xml> [device] [--runs N] [--warmup N]" << std::endl;
+                  << " <model.xml> [device] [--runs N] [--warmup N] [--num-requests N]" << std::endl;
         return 1;
     }
 
     const char *model_path = argv[1];
     const char *device     = "CPU";
-    int runs   = 30;
-    int warmup = 5;
+    int runs        = 30;
+    int warmup      = 5;
+    int num_requests = 1;
 
     for (int i = 2; i < argc; ++i) {
-        if      (strcmp(argv[i], "--runs")   == 0 && i+1 < argc) runs   = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--warmup") == 0 && i+1 < argc) warmup = atoi(argv[++i]);
+        if      (strcmp(argv[i], "--runs")         == 0 && i+1 < argc) runs         = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--warmup")       == 0 && i+1 < argc) warmup       = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--num-requests") == 0 && i+1 < argc) num_requests = atoi(argv[++i]);
         else device = argv[i];
     }
 
     std::cout << "=== OAAX YOLO Benchmark ===" << std::endl;
-    std::cout << "Model  : " << model_path << std::endl;
-    std::cout << "Device : " << device     << std::endl;
-    std::cout << "Warmup : " << warmup     << " runs" << std::endl;
-    std::cout << "Runs   : " << runs       << std::endl << std::endl;
+    std::cout << "Model    : " << model_path  << std::endl;
+    std::cout << "Device   : " << device      << std::endl;
+    std::cout << "Requests : " << num_requests << std::endl;
+    std::cout << "Warmup   : " << warmup      << " runs" << std::endl;
+    std::cout << "Runs     : " << runs        << std::endl << std::endl;
 
     // ── 1. Initialize runtime ─────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
-    char device_key[] = "device_type";
-    char log_key[]    = "log_level";
-    char log_val[]    = "2";
-    char *keys[]      = {device_key, log_key};
-    void *values[]    = {const_cast<char *>(device), log_val};
+    char device_key[]   = "device_type";
+    char log_key[]      = "log_level";
+    char log_val[]      = "2";
+    char req_key[]      = "num_requests";
+    char req_val[16];   snprintf(req_val, sizeof(req_val), "%d", num_requests);
+    char *keys[]        = {device_key, log_key, req_key};
+    void *values[]      = {const_cast<char *>(device), log_val, req_val};
 
-    int rc = runtime_initialization_with_args(2, keys, values);
+    int rc = runtime_initialization_with_args(3, keys, values);
     CHECK(rc == 0, "runtime_initialization_with_args failed (rc=" + std::to_string(rc) + ")");
     std::cout << "  ✓ " << runtime_name() << " v" << runtime_version() << std::endl;
 
@@ -198,16 +203,19 @@ int main(int argc, char **argv)
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, num_requests).empty(), "warmup failed");
     }
     std::cout << "  ✓ Done" << std::endl;
 
     // ── 4. Benchmark ──────────────────────────────────────────────────────────
-    std::cout << "[4] Benchmarking (" << runs << " runs)..." << std::endl;
+    // Use max_in_flight=num_requests to keep all workers fed simultaneously.
+    // When num_requests=1 this gives true per-request latency; higher values
+    // measure throughput at the cost of individual request latency accuracy.
+    std::cout << "[4] Benchmarking (" << runs << " runs, in-flight=" << num_requests << ")..." << std::endl;
     std::vector<Clock::time_point> send_times(runs);
 
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true);
+    auto latencies = run_batch(runs, send_times, true, num_requests);
     double bench_ms = Ms(Clock::now() - bench_start).count();
 
     CHECK(!latencies.empty(), "benchmark failed");

@@ -21,12 +21,12 @@
 using namespace std;
 
 // Helper function
-static void inference_thread_func();
+static void inference_thread_func(int thread_idx);
 
 // OpenVINO vars
 static std::shared_ptr<ov::Core> core;
 static std::shared_ptr<ov::CompiledModel> compiled_model;
-static std::shared_ptr<ov::InferRequest> infer_request;
+static std::vector<ov::InferRequest> infer_requests;
 
 // Queue variables
 static moodycamel::ConcurrentQueue<tensors_struct *> input_tensors_queue;
@@ -37,7 +37,7 @@ static vector<string> output_names;
 static vector<string> input_names;
 
 // Threads variables
-static std::thread inference_thread;
+static std::vector<std::thread> inference_threads;
 static std::atomic<bool> stop_inference_thread{false};
 
 // Logger
@@ -47,6 +47,7 @@ std::shared_ptr<spdlog::logger> logger;
 static int log_level = spdlog::level::info;
 static string log_file = "runtime.log";
 static int num_threads = 8;
+static int num_requests = 1;
 static string device_type = "CPU";
 static string precision = "FP32";
 
@@ -74,6 +75,12 @@ extern "C" int runtime_initialization_with_args(int length, char **keys, void **
                 num_threads = 1;
             else if (num_threads > 8)
                 num_threads = 8;
+        }
+        else if (key == "num_requests")
+        {
+            num_requests = std::stoi(static_cast<char *>(values[i]));
+            if (num_requests < 1)
+                num_requests = 1;
         }
         else if (key == "device_type")
         {
@@ -111,13 +118,11 @@ extern "C" int runtime_initialization()
             logger->trace("CPU inference threads set to {}", num_threads);
         }
 
-        stop_inference_thread = false;
-        inference_thread = std::thread(inference_thread_func);
-        logger->info("Inference thread started");
         logger->info("Runtime arguments:");
         logger->info("  log_level: {}", log_level);
         logger->info("  log_file: {}", log_file);
         logger->info("  num_threads: {}", num_threads);
+        logger->info("  num_requests: {}", num_requests);
         logger->info("  device_type: {}", device_type);
         logger->info("  precision: {}", precision);
         return 0;
@@ -159,10 +164,26 @@ extern "C" int runtime_model_loading(const char *model_path)
             core->compile_model(model, device_type));
         logger->debug("Model compiled successfully for device: {}", device_type);
 
-        // Create infer request
-        infer_request = std::make_shared<ov::InferRequest>(
-            compiled_model->create_infer_request());
-        logger->trace("Infer request created successfully");
+        // Stop any existing inference threads before replacing the request pool
+        if (!inference_threads.empty())
+        {
+            stop_inference_thread = true;
+            for (auto& t : inference_threads)
+                if (t.joinable()) t.join();
+            inference_threads.clear();
+        }
+
+        // Create one InferRequest per worker thread
+        infer_requests.clear();
+        for (int i = 0; i < num_requests; ++i)
+            infer_requests.emplace_back(compiled_model->create_infer_request());
+        logger->debug("Created {} infer request(s)", num_requests);
+
+        // Start inference worker threads
+        stop_inference_thread = false;
+        for (int i = 0; i < num_requests; ++i)
+            inference_threads.emplace_back(inference_thread_func, i);
+        logger->info("Started {} inference thread(s)", num_requests);
 
         return 0;
     }
@@ -188,9 +209,13 @@ extern "C" int send_input(tensors_struct *input_tensors)
     return 0;
 }
 
-// Inference thread function: polls for input tensors and runs inference
-static void inference_thread_func()
+// Inference thread function: each thread owns infer_requests[thread_idx] exclusively.
+// All threads compete on the shared input queue and post to the shared output queue.
+// FIFO ordering is NOT guaranteed when num_requests > 1.
+static void inference_thread_func(int thread_idx)
 {
+    ov::InferRequest& req = infer_requests[thread_idx];
+
     while (!stop_inference_thread)
     {
         tensors_struct *input_tensors = nullptr;
@@ -200,54 +225,37 @@ static void inference_thread_func()
             continue;
         }
 
-        logger->debug("Input tensors dequeued successfully.");
+        logger->debug("[thread {}] Input tensors dequeued.", thread_idx);
 
         try
         {
-            logger->trace("Preparing input tensors for inference...");
-
             // Set input tensors
             for (size_t i = 0; i < input_tensors->num_tensors; ++i)
             {
-                logger->trace("Preparing input tensor {}...", i);
-
                 std::string tensor_name = input_tensors->names[i];
 
-                // Create shape vector
                 ov::Shape shape;
                 for (size_t j = 0; j < input_tensors->ranks[i]; ++j)
-                {
                     shape.push_back(input_tensors->shapes[i][j]);
-                }
 
-                // Map data type
                 ov::element::Type ov_type = map_to_ov_type(input_tensors->data_types[i]);
-
-                // Create tensor
                 ov::Tensor input_tensor(ov_type, shape, input_tensors->data[i]);
-
-                // Set tensor to infer request
-                infer_request->set_tensor(tensor_name, input_tensor);
+                req.set_tensor(tensor_name, input_tensor);
             }
 
-            logger->debug("Performing inference...");
-            infer_request->infer();
-            logger->debug("Inference completed.");
+            logger->debug("[thread {}] Performing inference...", thread_idx);
+            req.infer();
+            logger->debug("[thread {}] Inference completed.", thread_idx);
 
-            // Free input tensors
             deep_free_tensors_struct(input_tensors);
-            logger->trace("Freed input tensors.");
 
             // Build output tensors
             tensors_struct *output_tensors = allocate_tensors_struct(output_names.size());
-            logger->trace("Building output tensors.");
 
             for (size_t i = 0; i < output_names.size(); ++i)
             {
-                logger->trace("Building output tensor {}...", i);
-
                 // Get output tensor
-                ov::Tensor output_tensor = infer_request->get_tensor(output_names[i]);
+                ov::Tensor output_tensor = req.get_tensor(output_names[i]);
 
                 // Set name
                 size_t name_len = output_names[i].length();
@@ -276,23 +284,19 @@ static void inference_thread_func()
                 memcpy(output_tensors->data[i], output_tensor.data(), data_size);
             }
 
-            logger->trace("Output tensors built successfully.");
-
-            // Enqueue output tensors
-            int success = output_tensors_queue.try_enqueue(output_tensors);
-            if (!success)
+            if (!output_tensors_queue.try_enqueue(output_tensors))
             {
-                logger->error("Failed to enqueue output tensors.");
+                logger->error("[thread {}] Failed to enqueue output tensors.", thread_idx);
                 deep_free_tensors_struct(output_tensors);
             }
             else
             {
-                logger->debug("Output tensors enqueued successfully.");
+                logger->debug("[thread {}] Output tensors enqueued.", thread_idx);
             }
         }
         catch (const std::exception &e)
         {
-            logger->error("Error during inference: {}", e.what());
+            logger->error("[thread {}] Inference error: {}", thread_idx, e.what());
             deep_free_tensors_struct(input_tensors);
         }
     }
@@ -317,10 +321,10 @@ extern "C" int runtime_destruction()
     stop_inference_thread = true;
     logger->trace("Waiting for inference thread to stop...");
 
-    if (inference_thread.joinable())
-        inference_thread.join();
-
-    logger->trace("Inference thread stopped.");
+    for (auto& t : inference_threads)
+        if (t.joinable()) t.join();
+    inference_threads.clear();
+    logger->trace("Inference threads stopped.");
 
     free_queue(input_tensors_queue);
     logger->trace("Freed input tensor queue.");
@@ -328,8 +332,8 @@ extern "C" int runtime_destruction()
     free_queue(output_tensors_queue);
     logger->trace("Freed output tensor queue.");
 
-    infer_request.reset();
-    logger->trace("Freed OpenVINO infer request.");
+    infer_requests.clear();
+    logger->trace("Freed OpenVINO infer requests.");
 
     compiled_model.reset();
     logger->trace("Freed OpenVINO compiled model.");
