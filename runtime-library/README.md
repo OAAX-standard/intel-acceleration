@@ -16,8 +16,7 @@ This OpenVINO implementation of an OAAX runtime uses the **OpenVINO native C++ A
 ## Prerequisites
 
 ### System Requirements
-- **OpenVINO Toolkit** 2024.0 or later
-- **Python 3.10+** (for building from pip-installed OpenVINO)
+- **OpenVINO Toolkit** 2026.1.0 or later
 - **GCC 9.5+** (for cross-compilation)
 - **CMake 3.10.2+**
 
@@ -120,15 +119,14 @@ The runtime supports the following initialization parameters:
 |-----------|------|---------|-------------|
 | `log_level` | int | `info` | Logging verbosity (trace, debug, info, warn, error) |
 | `log_file` | string | `runtime.log` | Log file path |
-| `num_threads` | int | `8` | Number of inference threads (1-8) |
 | `device_type` | string | `CPU` | Target device (CPU, GPU, NPU) |
-| `precision` | string | `FP32` | Inference precision (FP32, FP16, INT8) |
+| `perf_hint` | string | `latency` | Performance mode (`latency`, `throughput`, `cumulative_throughput`) |
 
 Example usage:
 ```c
-char* keys[] = {"num_threads", "device_type", "log_level"};
-void* values[] = {"4", "CPU", "2"}; // 2 = debug level
-runtime_initialization_with_args(3, keys, values);
+char* keys[] = {"device_type", "log_level"};
+void* values[] = {"CPU", "2"}; // 2 = debug level
+runtime_initialization_with_args(2, keys, values);
 ```
 
 ## API Reference
@@ -190,7 +188,7 @@ make -j$(nproc)
 
 ### OpenVINO Not Found
 ```
-Error: OpenVINO not found at /usr/local/lib/python3.10/dist-packages/openvino
+Error: OpenVINO not found at /opt/intel/openvino/runtime
 ```
 **Solution:** Set `OPENVINO_DIR` environment variable:
 ```bash
@@ -219,8 +217,8 @@ ls model.xml model.bin  # Both should exist
 
 ### CPU Optimization
 ```c
-char* keys[] = {"num_threads", "device_type"};
-void* values[] = {"8", "CPU"};
+char* keys[] = {"device_type", "perf_hint"};
+void* values[] = {"CPU", "throughput"};
 runtime_initialization_with_args(2, keys, values);
 ```
 

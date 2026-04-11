@@ -28,7 +28,7 @@ IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
 
 ### Runtime Library (C++)
 
-Requires cross-compilation toolchain at `/opt/x86_64-unknown-linux-gnu-gcc-9.5.0` and OpenVINO installed (defaults to `/usr/local/lib/python3.10/dist-packages/openvino`).
+Requires cross-compilation toolchain at `/opt/x86_64-unknown-linux-gnu-gcc-9.5.0` and OpenVINO installed (defaults to `/opt/intel/openvino/runtime`).
 
 ```bash
 cd runtime-library
@@ -80,7 +80,7 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 - `src/runtime_utils.cpp` — type mapping between `tensor_data_type` and `ov::element::Type`
 - `include/tensors_struct.h` — OAAX C tensor struct (names, ranks, shapes, data_types, data)
 - `include/runtime_core.hpp` — public C API (OAAX interface)
-- `deps/` — vendored: spdlog, concurrentqueue, nlohmann/json, c-utilities
+- `deps/` — vendored: spdlog, concurrentqueue, c-utilities
 
 **Inference architecture:**
 - N worker threads (one per `ov::InferRequest`) all compete on `input_tensors_queue`

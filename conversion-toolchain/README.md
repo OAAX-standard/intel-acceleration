@@ -250,12 +250,12 @@ pytest tests/ -v
 ## Requirements
 
 **Runtime:**
-- Python 3.10+
-- OpenVINO 2024.0+
+- Python 3.13+
+- OpenVINO 2026.1.0+
 - Docker 20.10+ (for containerized deployment)
 
 **Optional:**
-- NNCF 2.11+ (for INT8 quantization)
+- NNCF 2.19+ (for INT8 quantization)
 
 ---
 
