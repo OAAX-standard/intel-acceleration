@@ -152,7 +152,7 @@ for xml in "$COMPILED_DIR"/*/FP32/*.xml \
     xml_abs="$(realpath "$xml")"
     for device in "${DEVICES[@]}"; do
         out=$(cd "$BUILD_DIR" && LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH" \
-              ./yolo_test "$xml_abs" "$device" --warmup 5 --runs 30 --perf-hint throughput 2>&1)
+              ./yolo_test "$xml_abs" "$device" --warmup 5 --runs 300 --perf-hint throughput 2>&1)
 
         if echo "$out" | grep -q "=== Results ==="; then
             avg=$(echo "$out" | awk '/  Avg /{print $(NF-1)}')
