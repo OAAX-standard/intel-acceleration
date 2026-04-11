@@ -79,14 +79,14 @@ Measured with `benchmark_app -hint throughput` and `yolo_test --perf-hint throug
 
 | Tool | Model | Precision | Device | Throughput |
 |------|-------|-----------|--------|------------|
-| benchmark_app | yolo11n | FP32 | CPU | ~97 FPS |
-| benchmark_app | yolo11n | FP16 | CPU | ~98 FPS |
-| benchmark_app | yolo11n | INT8 | CPU | **~243 FPS** |
-| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~94 FPS |
-| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~96 FPS |
-| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~229 FPS |
+| benchmark_app | yolo11n | FP32 | CPU | ~99.5 FPS |
+| benchmark_app | yolo11n | FP16 | CPU | ~99.5 FPS |
+| benchmark_app | yolo11n | INT8 | CPU | **~242 FPS** |
+| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~99.6 FPS |
+| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~98.2 FPS |
+| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~236 FPS |
 
-The OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~5% for INT8. The gap is the cost of the mandatory output `memcpy` in the OAAX abstraction layer (~2.8 MB per inference). `benchmark_app` reads tensors in-place with no copy.
+The OAAX runtime matches `benchmark_app` within ~1% for FP32/FP16 and ~3% for INT8. The runtime uses `set_output_tensor` to point each `InferRequest`'s output directly at a pre-allocated pool buffer so OpenVINO writes inference results in-place — zero copy on the hot path.
 
 ## Pre-built OAAX artifacts
 
