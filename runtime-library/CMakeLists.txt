@@ -27,7 +27,8 @@ endif()
 set(OPENVINO_INCLUDE_DIR "${OPENVINO_DIR}/include")
 
 # Archive layout: runtime/lib/intel64/ (Linux) or runtime/lib/intel64/Release/ (Windows)
-if(MSVC)
+# NOTE: must use WIN32 here (not MSVC) — MSVC is only set after project() is called.
+if(WIN32)
     set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/lib/intel64/Release")
     set(OPENVINO_BIN_DIR "${OPENVINO_DIR}/bin/intel64/Release")
 else()
@@ -210,6 +211,7 @@ if(MSVC)
   add_custom_command(TARGET RuntimeLibrary POST_BUILD
     COMMAND ${CMAKE_COMMAND}
       "-DSRC_BIN_DIR=${OPENVINO_BIN_DIR}"
+      "-DSRC_LIB_DIR=${OPENVINO_LIB_DIR}"
       "-DSRC_TBB_DIR=${OPENVINO_TBB_BIN_DIR}"
       "-DDST_DIR=$<TARGET_FILE_DIR:RuntimeLibrary>"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_windows_dlls.cmake"
