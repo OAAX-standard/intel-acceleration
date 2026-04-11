@@ -55,8 +55,7 @@ bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.
 
 # C++ runtime tests (after building runtime)
 cd runtime-library/build && ./simple_test
-cd runtime-library/build && ./yolo_test <model.xml> [device] [--runs N] [--warmup N] \
-    [--num-requests N] [--perf-hint latency|throughput]
+cd runtime-library/build && ./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
 ```
 
 ---
@@ -95,8 +94,7 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 | Key | Default | Notes |
 |-----|---------|-------|
 | `device_type` | `"CPU"` | `"CPU"`, `"GPU"`, `"NPU"` |
-| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time |
-| `num_requests` | `1` | Worker count; if `perf_hint=throughput` and this is `1`, auto-scales to `OPTIMAL_NUMBER_OF_INFER_REQUESTS` |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS` |
 | `precision` | `"FP32"` | Informational only |
 | `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |

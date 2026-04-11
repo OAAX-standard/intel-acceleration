@@ -69,7 +69,7 @@ pytest tests/test_docker.py -v           # Docker tests (image must be built fir
 ```bash
 cd runtime-library/build
 ./simple_test
-./yolo_test /path/to/model.xml [device] [--runs N] [--warmup N] [--num-requests N] [--perf-hint latency|throughput]
+./yolo_test /path/to/model.xml [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
 ```
 
 ## Benchmark results (reference, Intel Core i7-13700K)

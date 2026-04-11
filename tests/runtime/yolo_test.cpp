@@ -150,45 +150,40 @@ int main(int argc, char **argv)
 {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0]
-                  << " <model.xml> [device] [--runs N] [--warmup N] [--num-requests N] [--perf-hint latency|throughput]" << std::endl;
+                  << " <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]" << std::endl;
         return 1;
     }
 
     const char *model_path = argv[1];
     const char *device     = "CPU";
     const char *perf_hint  = "latency";
-    int runs         = 30;
-    int warmup       = 5;
-    int num_requests = 1;
+    int runs   = 30;
+    int warmup = 5;
 
     for (int i = 2; i < argc; ++i) {
-        if      (strcmp(argv[i], "--runs")         == 0 && i+1 < argc) runs         = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--warmup")       == 0 && i+1 < argc) warmup       = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--num-requests") == 0 && i+1 < argc) num_requests = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--perf-hint")    == 0 && i+1 < argc) perf_hint    = argv[++i];
+        if      (strcmp(argv[i], "--runs")      == 0 && i+1 < argc) runs      = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--warmup")    == 0 && i+1 < argc) warmup    = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--perf-hint") == 0 && i+1 < argc) perf_hint = argv[++i];
         else device = argv[i];
     }
 
     std::cout << "=== OAAX YOLO Benchmark ===" << std::endl;
-    std::cout << "Model     : " << model_path  << std::endl;
-    std::cout << "Device    : " << device      << std::endl;
-    std::cout << "Requests  : " << num_requests << std::endl;
-    std::cout << "Perf hint : " << perf_hint   << std::endl;
-    std::cout << "Warmup    : " << warmup      << " runs" << std::endl;
-    std::cout << "Runs      : " << runs        << std::endl << std::endl;
+    std::cout << "Model     : " << model_path << std::endl;
+    std::cout << "Device    : " << device     << std::endl;
+    std::cout << "Perf hint : " << perf_hint  << std::endl;
+    std::cout << "Warmup    : " << warmup     << " runs" << std::endl;
+    std::cout << "Runs      : " << runs       << std::endl << std::endl;
 
     // ── 1. Initialize runtime ─────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
-    char device_key[]    = "device_type";
-    char log_key[]       = "log_level";
-    char log_val[]       = "2";
-    char req_key[]       = "num_requests";
-    char hint_key[]      = "perf_hint";
-    char req_val[16];    snprintf(req_val, sizeof(req_val), "%d", num_requests);
-    char *keys[]         = {device_key, log_key, req_key, hint_key};
-    void *values[]       = {const_cast<char *>(device), log_val, req_val, const_cast<char *>(perf_hint)};
+    char device_key[] = "device_type";
+    char log_key[]    = "log_level";
+    char log_val[]    = "2";
+    char hint_key[]   = "perf_hint";
+    char *keys[]      = {device_key, log_key, hint_key};
+    void *values[]    = {const_cast<char *>(device), log_val, const_cast<char *>(perf_hint)};
 
-    int rc = runtime_initialization_with_args(4, keys, values);
+    int rc = runtime_initialization_with_args(3, keys, values);
     CHECK(rc == 0, "runtime_initialization_with_args failed (rc=" + std::to_string(rc) + ")");
     std::cout << "  ✓ " << runtime_name() << " v" << runtime_version() << std::endl;
 

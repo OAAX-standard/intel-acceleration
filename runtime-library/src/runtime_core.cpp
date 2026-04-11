@@ -53,7 +53,6 @@ std::shared_ptr<spdlog::logger> logger;
 // Runtime arguments
 static int log_level = spdlog::level::info;
 static string log_file = "runtime.log";
-static int num_requests = 1;
 static string device_type = "CPU";
 static string precision = "FP32";
 static string perf_hint = "latency";   // "latency" | "throughput" | "cumulative_throughput"
@@ -74,12 +73,6 @@ extern "C" int runtime_initialization_with_args(int length, char **keys, void **
         else if (key == "log_file")
         {
             log_file = string(static_cast<char *>(values[i]));
-        }
-        else if (key == "num_requests")
-        {
-            num_requests = std::stoi(static_cast<char *>(values[i]));
-            if (num_requests < 1)
-                num_requests = 1;
         }
         else if (key == "device_type")
         {
@@ -119,7 +112,6 @@ extern "C" int runtime_initialization()
         logger->info("Runtime arguments:");
         logger->info("  log_level: {}", log_level);
         logger->info("  log_file: {}", log_file);
-        logger->info("  num_requests: {}", num_requests);
         logger->info("  device_type: {}", device_type);
         logger->info("  precision: {}", precision);
         logger->info("  perf_hint: {}", perf_hint);
@@ -171,15 +163,10 @@ extern "C" int runtime_model_loading(const char *model_path)
             core->compile_model(model, device_type, config));
         logger->debug("Model compiled for device: {} (hint={})", device_type, perf_hint);
 
-        // Always infer the optimal worker count from the compiled model unless the
-        // caller explicitly overrode num_requests. OpenVINO returns 1 for LATENCY
-        // and N streams for THROUGHPUT/CUMULATIVE_THROUGHPUT automatically.
-        int actual_requests = num_requests;
-        if (num_requests == 1)
-        {
-            actual_requests = compiled_model->get_property(ov::optimal_number_of_infer_requests);
-            logger->info("Optimal infer requests for hint={}: {}", perf_hint, actual_requests);
-        }
+        // Infer the optimal worker count from the compiled model.
+        // OpenVINO returns 1 for LATENCY and N streams for THROUGHPUT/CUMULATIVE_THROUGHPUT.
+        int actual_requests = compiled_model->get_property(ov::optimal_number_of_infer_requests);
+        logger->info("Optimal infer requests for hint={}: {}", perf_hint, actual_requests);
 
         // Stop any existing inference threads and drain the old pool before replacing
         if (!inference_threads.empty())
