@@ -201,29 +201,22 @@ int main(int argc, char **argv)
     rc = runtime_model_loading(model_path);
     CHECK(rc == 0, "runtime_model_loading failed");
     double load_ms = Ms(Clock::now() - tload).count();
-
-    // Query the actual worker count (may differ from CLI --num-requests when
-    // throughput hint auto-scales to the optimal number).
-    int actual_requests = runtime_get_num_infer_requests();
-    std::cout << "  ✓ Loaded in " << load_ms << " ms"
-              << " (" << actual_requests << " infer request(s))" << std::endl;
+    std::cout << "  ✓ Loaded in " << load_ms << " ms" << std::endl;
 
     // ── 3. Warmup ─────────────────────────────────────────────────────────────
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false, actual_requests).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, 10).empty(), "warmup failed");
     }
     std::cout << "  ✓ Done" << std::endl;
 
     // ── 4. Benchmark ──────────────────────────────────────────────────────────
-    // max_in_flight matches actual_requests so all workers are kept fed.
-    // With 1 worker this gives true per-request latency; N workers measure throughput.
-    std::cout << "[4] Benchmarking (" << runs << " runs, in-flight=" << actual_requests << ")..." << std::endl;
+    std::cout << "[4] Benchmarking (" << runs << " runs, in-flight=10)..." << std::endl;
     std::vector<Clock::time_point> send_times(runs);
 
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true, actual_requests);
+    auto latencies = run_batch(runs, send_times, true, 10);
     double bench_ms = Ms(Clock::now() - bench_start).count();
 
     CHECK(!latencies.empty(), "benchmark failed");

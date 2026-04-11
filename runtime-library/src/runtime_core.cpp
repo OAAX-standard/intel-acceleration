@@ -381,7 +381,3 @@ extern "C" const char *runtime_name()
     return "OAAX Intel Runtime (OpenVINO Native)";
 }
 
-extern "C" int runtime_get_num_infer_requests()
-{
-    return (int)infer_requests.size();
-}

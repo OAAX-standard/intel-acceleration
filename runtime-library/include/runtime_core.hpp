@@ -28,8 +28,5 @@ extern "C" EXPOSE_FUNCTION const char *runtime_version();
 
 extern "C" EXPOSE_FUNCTION const char *runtime_name();
 
-// Returns the number of InferRequest workers currently active (set at model load time).
-// Useful for callers to size their max_in_flight for throughput mode.
-extern "C" EXPOSE_FUNCTION int runtime_get_num_infer_requests();
 
 #endif // RUNTIME_CORE_HPP
