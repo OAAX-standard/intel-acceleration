@@ -63,7 +63,7 @@ jobs:
           fi
 
   build-runtimes-for-ubuntu:
-    timeout-minutes: 10
+    timeout-minutes: 20
     runs-on: ubuntu-22.04
 
     steps:
@@ -75,24 +75,12 @@ jobs:
           lfs: true
 
       - name: Set up environment
-        run: sudo bash scripts/setup-env.sh
-
-      - name: Install OpenVINO
         run: |
-          OV_ARCHIVE="openvino_toolkit_ubuntu22_2026.1.0.21367.63e31528c62_x86_64.tgz"
-          wget -q "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/linux/${OV_ARCHIVE}" -O openvino.tgz
-          sudo mkdir -p /opt/intel/openvino
-          sudo tar -xzf openvino.tgz -C /opt/intel/openvino --strip-components=1
-          rm openvino.tgz
+          sudo bash scripts/setup-env.sh
           echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
 
       - name: Cross-compile runtimes
         run: bash runtime-library/build-runtimes.sh
-
-      - name: Install s3cmd
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y s3cmd
 
       - name: Configure s3cmd
         run: |
@@ -125,8 +113,6 @@ jobs:
           if [ "${{ github.ref }}" == "refs/heads/main" ]; then
             s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/latest/INTEL/x86_64/Ubuntu/library.tar.gz"
           fi
-
-
 
   build-runtimes-for-windows-x86_64:
     timeout-minutes: 10
@@ -211,11 +197,12 @@ jobs:
           lfs: true
 
       - name: Set up environment
-        run: sudo bash scripts/setup-env.sh
+        run: |
+          sudo bash scripts/setup-env.sh
+          echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
 
       - name: Configure s3cmd
         run: |
-          sudo apt-get install -y s3cmd
           cat > ~/.s3cfg <<EOF
           [default]
           access_key = ${{ secrets.S3_ACCESS_KEY }}
@@ -241,15 +228,8 @@ jobs:
           s3cmd get "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" /tmp/library.tar.gz
           tar xzf /tmp/library.tar.gz -C runtime-library/build/
 
-      - name: Install uv
-        run: pip install uv
-
       - name: Stage 1 — convert models and run toolchain tests
         run: bash scripts/stage1_compile.sh
 
       - name: Stage 2 — build test binaries and run tests
-        run: |
-          source .venv/bin/activate
-          OPENVINO_DIR=$(python -c "import openvino, os; print(os.path.dirname(openvino.__file__))")
-          export OPENVINO_DIR
-          bash scripts/stage2_run.sh --duration 5
+        run: bash scripts/stage2_run.sh --duration 5
