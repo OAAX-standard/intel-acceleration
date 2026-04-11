@@ -443,7 +443,6 @@ wheels = [
 
 [[package]]
 name = "conversion-toolchain"
-version = "0.3.0"
 source = { editable = "conversion-toolchain" }
 dependencies = [
     { name = "lgg" },
@@ -453,7 +452,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "conversion-toolchain", extras = ["quantization", "test", "integration"], marker = "extra == 'all'" },
+    { name = "conversion-toolchain", extras = ["integration", "quantization", "test"], marker = "extra == 'all'" },
     { name = "lgg" },
     { name = "nncf", marker = "extra == 'quantization'", specifier = ">=2.19.0,<3.0.0" },
     { name = "numpy", marker = "extra == 'integration'", specifier = ">=1.21" },
@@ -677,8 +676,7 @@ wheels = [
 
 [[package]]
 name = "intel-acceleration-tests"
-version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "conversion-toolchain" },
     { name = "numpy" },
