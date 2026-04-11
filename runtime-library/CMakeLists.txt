@@ -17,14 +17,22 @@ set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
 set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
 
 # === OpenVINO Configuration ===
-# Define OpenVINO paths (can be overridden via -DOPENVINO_DIR)
+# Default assumes the archive installation extracted to /opt/intel/openvino,
+# i.e. OPENVINO_DIR points to the `runtime/` subdirectory of the archive.
+# Override with -DOPENVINO_DIR=<path> or the OPENVINO_DIR env variable.
 if(NOT DEFINED OPENVINO_DIR)
-    # Try to find OpenVINO in common locations
-    set(OPENVINO_DIR "/usr/local/lib/python3.10/dist-packages/openvino")
+    set(OPENVINO_DIR "/opt/intel/openvino/runtime")
 endif()
 
 set(OPENVINO_INCLUDE_DIR "${OPENVINO_DIR}/include")
-set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/libs")
+
+# Archive layout: runtime/lib/intel64/ (Linux) or runtime/lib/intel64/Release/ (Windows)
+if(MSVC)
+    set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/lib/intel64/Release")
+    set(OPENVINO_BIN_DIR "${OPENVINO_DIR}/bin/intel64/Release")
+else()
+    set(OPENVINO_LIB_DIR "${OPENVINO_DIR}/lib/intel64")
+endif()
 
 # Verify OpenVINO installation
 if(NOT EXISTS "${OPENVINO_INCLUDE_DIR}/openvino/openvino.hpp")
@@ -187,8 +195,8 @@ if(MSVC)
     ws2_32 bcrypt
   )
 
-  # Copy OpenVINO DLLs
-  file(GLOB OPENVINO_DLLS "${OPENVINO_LIB_DIR}/*.dll")
+  # Copy OpenVINO DLLs (archive layout puts them in bin/intel64/Release/)
+  file(GLOB OPENVINO_DLLS "${OPENVINO_BIN_DIR}/*.dll")
   add_custom_command(TARGET RuntimeLibrary POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${OPENVINO_DLLS}

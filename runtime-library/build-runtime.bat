@@ -46,8 +46,14 @@ pushd "%BUILD_DIR%"
 REM Delete all files in the build directory quietly (ignore errors/output)
 del /q * >nul 2>&1
 
+REM Resolve OpenVINO directory (set by CI or default to archive install location)
+if not defined OPENVINO_DIR (
+	set "OPENVINO_DIR=C:\intel\openvino\runtime"
+)
+echo Using OpenVINO from: %OPENVINO_DIR%
+
 REM Run CMake to generate build files using the parent directory as the source
-cmake .. -DRUNTIME_VERSION="%RUNTIME_VERSION%"
+cmake .. -DRUNTIME_VERSION="%RUNTIME_VERSION%" -DOPENVINO_DIR="%OPENVINO_DIR%"
 
 REM If CMake failed, exit the script with error
 if errorlevel 1 exit /b 1

@@ -17,7 +17,7 @@ RUNTIME_VERSION="$(cat "$VERSION_FILE")"
 echo "Building OpenVINO Native Runtime for version: $RUNTIME_VERSION"
 
 # Detect OpenVINO installation
-OPENVINO_DIR="${OPENVINO_DIR:-/usr/local/lib/python3.10/dist-packages/openvino}"
+OPENVINO_DIR="${OPENVINO_DIR:-/opt/intel/openvino/runtime}"
 
 if [ ! -f "$OPENVINO_DIR/include/openvino/openvino.hpp" ]; then
     echo "Error: OpenVINO not found at $OPENVINO_DIR"
