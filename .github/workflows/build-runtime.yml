@@ -200,6 +200,7 @@ jobs:
         run: |
           sudo bash scripts/setup-env.sh
           echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
+          echo "CMAKE_BIN=/usr/local/bin/cmake" >> "$GITHUB_ENV"
 
       - name: Configure s3cmd
         run: |
