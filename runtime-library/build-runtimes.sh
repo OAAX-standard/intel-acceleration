@@ -41,6 +41,20 @@ make -j "$(nproc)"
 echo "Build complete. The following shared libraries were created:"
 ls ./*.so
 
+# Fix RPATH on all bundled shared libraries: the cross-linker bakes in
+# build-time paths (e.g. /opt/intel/openvino/...) which won't exist on the
+# target system. Set $ORIGIN on every .so so each lib finds its neighbours
+# in the same deployment directory, covering transitive deps too.
+if command -v patchelf &> /dev/null; then
+    # shellcheck disable=SC2016  # $ORIGIN is a linker token, not a shell variable
+    rpath_origin='$ORIGIN'
+    find . -maxdepth 1 -name "*.so*" ! -type l | while read -r lib; do
+        patchelf --set-rpath "$rpath_origin" "$lib" 2>/dev/null && echo "  RPATH \$ORIGIN: $lib"
+    done
+else
+    echo "WARNING: patchelf not found — RPATH not fixed. Install patchelf before packaging."
+fi
+
 # Clear executable stack bit for security
 if command -v execstack &> /dev/null; then
     execstack -c ./*.so* || true
