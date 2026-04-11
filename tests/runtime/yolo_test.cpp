@@ -136,7 +136,7 @@ static std::vector<double> run_batch(int n,
                           << std::endl;
                 ok = false;
             }
-            deep_free_tensors_struct(output);
+            runtime_return_output(output);
         }
     });
 

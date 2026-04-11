@@ -20,8 +20,9 @@
 
 using namespace std;
 
-// Helper function
+// Helper functions
 static void inference_thread_func(int thread_idx);
+static void drain_output_pool();
 
 // OpenVINO vars
 static std::shared_ptr<ov::Core> core;
@@ -31,6 +32,12 @@ static std::vector<ov::InferRequest> infer_requests;
 // Queue variables
 static moodycamel::ConcurrentQueue<tensors_struct *> input_tensors_queue;
 static moodycamel::ConcurrentQueue<tensors_struct *> output_tensors_queue;
+
+// Output buffer pool: pre-allocated tensors_struct with fixed-size data buffers.
+// Workers dequeue a free buffer, memcpy output data into it, enqueue to output queue.
+// Consumers call runtime_return_output() to return buffers instead of deep_free.
+static moodycamel::ConcurrentQueue<tensors_struct *> output_buffer_pool;
+static std::atomic<bool> pool_active{false};
 
 // Session variables
 static vector<string> output_names;
@@ -173,7 +180,7 @@ extern "C" int runtime_model_loading(const char *model_path)
             logger->info("Auto-scaled to {} infer requests (hint={})", actual_requests, perf_hint);
         }
 
-        // Stop any existing inference threads before replacing the request pool
+        // Stop any existing inference threads and drain the old pool before replacing
         if (!inference_threads.empty())
         {
             stop_inference_thread = true;
@@ -181,12 +188,57 @@ extern "C" int runtime_model_loading(const char *model_path)
                 if (t.joinable()) t.join();
             inference_threads.clear();
         }
+        drain_output_pool();
 
         // Create one InferRequest per worker thread
         infer_requests.clear();
         for (int i = 0; i < actual_requests; ++i)
             infer_requests.emplace_back(compiled_model->create_infer_request());
         logger->debug("Created {} infer request(s)", actual_requests);
+
+        // Pre-allocate output buffer pool if all output shapes are static.
+        // Pool size: 4× worker count gives enough headroom for max_in_flight bursts.
+        int pool_size = actual_requests * 4;
+        bool can_pool = true;
+
+        // Collect output shape info from the compiled model
+        struct OutInfo { ov::Shape shape; tensor_data_type dtype; size_t byte_size; };
+        std::vector<OutInfo> out_infos;
+
+        for (size_t i = 0; i < output_names.size(); ++i)
+        {
+            auto port = compiled_model->output(output_names[i]);
+            if (!port.get_partial_shape().is_static()) { can_pool = false; break; }
+            ov::Shape shape = port.get_partial_shape().to_shape();
+            tensor_data_type dtype = map_to_tensors_struct_type(port.get_element_type());
+            size_t byte_size = port.get_element_type().size() * ov::shape_size(shape);
+            out_infos.push_back({shape, dtype, byte_size});
+        }
+
+        if (can_pool)
+        {
+            for (int i = 0; i < pool_size; ++i)
+            {
+                tensors_struct *ts = allocate_tensors_struct(output_names.size());
+                for (size_t j = 0; j < output_names.size(); ++j)
+                {
+                    ts->names[j] = strdup(output_names[j].c_str());
+                    ts->ranks[j] = out_infos[j].shape.size();
+                    ts->shapes[j] = (size_t *)malloc(sizeof(size_t) * out_infos[j].shape.size());
+                    for (size_t k = 0; k < out_infos[j].shape.size(); ++k)
+                        ts->shapes[j][k] = out_infos[j].shape[k];
+                    ts->data_types[j] = out_infos[j].dtype;
+                    ts->data[j] = malloc(out_infos[j].byte_size);
+                }
+                output_buffer_pool.enqueue(ts);
+            }
+            pool_active = true;
+            logger->info("Pre-allocated {} output buffers (pool)", pool_size);
+        }
+        else
+        {
+            logger->info("Dynamic output shapes — buffer pool disabled, using malloc per inference");
+        }
 
         // Start inference worker threads
         stop_inference_thread = false;
@@ -258,45 +310,53 @@ static void inference_thread_func(int thread_idx)
 
             deep_free_tensors_struct(input_tensors);
 
-            // Build output tensors
-            tensors_struct *output_tensors = allocate_tensors_struct(output_names.size());
-
-            for (size_t i = 0; i < output_names.size(); ++i)
+            // Get a pre-allocated output buffer from the pool (fast path),
+            // or fall back to malloc if the pool is not active.
+            tensors_struct *output_tensors = nullptr;
+            if (pool_active.load(std::memory_order_relaxed))
             {
-                // Get output tensor
-                ov::Tensor output_tensor = req.get_tensor(output_names[i]);
-
-                // Set name
-                size_t name_len = output_names[i].length();
-                output_tensors->names[i] = (char *)malloc(name_len + 1);
-                strcpy(output_tensors->names[i], output_names[i].c_str());
-
-                // Set shape
-                ov::Shape shape = output_tensor.get_shape();
-                output_tensors->ranks[i] = shape.size();
-                output_tensors->shapes[i] = (size_t *)malloc(sizeof(size_t) * shape.size());
-                for (size_t j = 0; j < shape.size(); ++j)
+                while (!output_buffer_pool.try_dequeue(output_tensors))
                 {
-                    output_tensors->shapes[i][j] = shape[j];
+                    if (stop_inference_thread) return;
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
                 }
-
-                // Set data type
-                output_tensors->data_types[i] = map_to_tensors_struct_type(output_tensor.get_element_type());
-
-                // Copy data
-                size_t data_size = output_tensor.get_byte_size();
-                output_tensors->data[i] = (void *)malloc(data_size);
-                if (!output_tensors->data[i])
+                // Pool buffer: names/shapes/dtypes pre-set — just memcpy the data.
+                for (size_t i = 0; i < output_names.size(); ++i)
                 {
-                    throw std::runtime_error("Failed to allocate memory for output tensor data.");
+                    ov::Tensor out = req.get_tensor(output_names[i]);
+                    memcpy(output_tensors->data[i], out.data(), out.get_byte_size());
                 }
-                memcpy(output_tensors->data[i], output_tensor.data(), data_size);
+            }
+            else
+            {
+                // Fallback: full allocation (dynamic shapes)
+                output_tensors = allocate_tensors_struct(output_names.size());
+                for (size_t i = 0; i < output_names.size(); ++i)
+                {
+                    ov::Tensor out = req.get_tensor(output_names[i]);
+
+                    output_tensors->names[i] = strdup(output_names[i].c_str());
+
+                    ov::Shape shape = out.get_shape();
+                    output_tensors->ranks[i] = shape.size();
+                    output_tensors->shapes[i] = (size_t *)malloc(sizeof(size_t) * shape.size());
+                    for (size_t j = 0; j < shape.size(); ++j)
+                        output_tensors->shapes[i][j] = shape[j];
+
+                    output_tensors->data_types[i] = map_to_tensors_struct_type(out.get_element_type());
+
+                    size_t data_size = out.get_byte_size();
+                    output_tensors->data[i] = malloc(data_size);
+                    if (!output_tensors->data[i])
+                        throw std::runtime_error("Failed to allocate output tensor data.");
+                    memcpy(output_tensors->data[i], out.data(), data_size);
+                }
             }
 
             if (!output_tensors_queue.try_enqueue(output_tensors))
             {
                 logger->error("[thread {}] Failed to enqueue output tensors.", thread_idx);
-                deep_free_tensors_struct(output_tensors);
+                runtime_return_output(output_tensors);
             }
             else
             {
@@ -324,11 +384,28 @@ extern "C" int receive_output(tensors_struct **output_tensors)
     return 0;
 }
 
+extern "C" void runtime_return_output(tensors_struct *output)
+{
+    if (!output) return;
+    if (pool_active.load(std::memory_order_relaxed))
+        output_buffer_pool.enqueue(output);
+    else
+        deep_free_tensors_struct(output);
+}
+
+static void drain_output_pool()
+{
+    pool_active = false;
+    tensors_struct *ts;
+    while (output_buffer_pool.try_dequeue(ts))
+        deep_free_tensors_struct(ts);
+}
+
 extern "C" int runtime_destruction()
 {
     logger->info("Destroying runtime...");
     stop_inference_thread = true;
-    logger->trace("Waiting for inference thread to stop...");
+    logger->trace("Waiting for inference threads to stop...");
 
     for (auto& t : inference_threads)
         if (t.joinable()) t.join();
@@ -340,6 +417,9 @@ extern "C" int runtime_destruction()
 
     free_queue(output_tensors_queue);
     logger->trace("Freed output tensor queue.");
+
+    drain_output_pool();
+    logger->trace("Freed output buffer pool.");
 
     infer_requests.clear();
     logger->trace("Freed OpenVINO infer requests.");
@@ -368,4 +448,3 @@ extern "C" const char *runtime_name()
 {
     return "OAAX Intel Runtime (OpenVINO Native)";
 }
-
