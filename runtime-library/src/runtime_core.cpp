@@ -6,6 +6,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#define NOMINMAX  // prevent windows.h from defining min/max macros
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 // Minimal POSIX semaphore shim — maps sem_t to a Windows HANDLE semaphore.
 struct sem_t {
