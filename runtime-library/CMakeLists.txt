@@ -191,7 +191,6 @@ if(MSVC)
     spdlog::spdlog
     c_utilities
     openvino
-    tbb
     ws2_32 bcrypt
   )
 
@@ -206,7 +205,6 @@ else()
   target_link_libraries(RuntimeLibrary PUBLIC
     -Wl,--start-group
     openvino
-    tbb
     spdlog::spdlog
     pthread dl c_utilities stdc++
     -Wl,--end-group

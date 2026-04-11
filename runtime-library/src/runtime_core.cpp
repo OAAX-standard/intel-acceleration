@@ -1,5 +1,3 @@
-#include <semaphore.h>
-
 #include <atomic>
 #include <iostream>
 #include <numeric>
@@ -9,6 +7,23 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// Minimal POSIX semaphore shim — maps sem_t to a Windows HANDLE semaphore.
+struct sem_t {
+  HANDLE h;
+};
+static inline int sem_init(sem_t *s, int /*pshared*/, unsigned int value) {
+  s->h = CreateSemaphoreW(nullptr, (LONG)value, 0x7FFFFFFF, nullptr);
+  return s->h ? 0 : -1;
+}
+static inline int sem_wait(sem_t *s) {
+  return WaitForSingleObject(s->h, INFINITE) == WAIT_OBJECT_0 ? 0 : -1;
+}
+static inline int sem_post(sem_t *s) {
+  return ReleaseSemaphore(s->h, 1, nullptr) ? 0 : -1;
+}
+static inline int sem_destroy(sem_t *s) { return CloseHandle(s->h) ? 0 : -1; }
+#else
+#include <semaphore.h>
 #endif
 
 #include <spdlog/spdlog.h>
