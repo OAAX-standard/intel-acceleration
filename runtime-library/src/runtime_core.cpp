@@ -50,6 +50,7 @@ static int num_threads = 8;
 static int num_requests = 1;
 static string device_type = "CPU";
 static string precision = "FP32";
+static string perf_hint = "latency";   // "latency" | "throughput" | "cumulative_throughput"
 
 extern "C" int runtime_initialization_with_args(int length, char **keys, void **values)
 {
@@ -90,6 +91,12 @@ extern "C" int runtime_initialization_with_args(int length, char **keys, void **
         {
             precision = string(static_cast<char *>(values[i]));
         }
+        else if (key == "perf_hint")
+        {
+            string val = string(static_cast<char *>(values[i]));
+            if (val == "latency" || val == "throughput" || val == "cumulative_throughput")
+                perf_hint = val;
+        }
         else
         {
             // Unknown key, ignore
@@ -111,13 +118,6 @@ extern "C" int runtime_initialization()
         core = std::make_shared<ov::Core>();
         logger->trace("OpenVINO Core initialized");
 
-        // Configure device properties
-        if (device_type == "CPU")
-        {
-            core->set_property(device_type, ov::inference_num_threads(num_threads));
-            logger->trace("CPU inference threads set to {}", num_threads);
-        }
-
         logger->info("Runtime arguments:");
         logger->info("  log_level: {}", log_level);
         logger->info("  log_file: {}", log_file);
@@ -125,6 +125,7 @@ extern "C" int runtime_initialization()
         logger->info("  num_requests: {}", num_requests);
         logger->info("  device_type: {}", device_type);
         logger->info("  precision: {}", precision);
+        logger->info("  perf_hint: {}", perf_hint);
         return 0;
     }
     catch (const std::exception &e)
@@ -159,10 +160,30 @@ extern "C" int runtime_model_loading(const char *model_path)
             logger->trace("Output: {}", output.get_any_name());
         }
 
+        // Build compile config: performance hint + CPU thread count
+        ov::AnyMap config;
+        if (perf_hint == "throughput")
+            config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::THROUGHPUT;
+        else if (perf_hint == "cumulative_throughput")
+            config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::CUMULATIVE_THROUGHPUT;
+        else
+            config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::LATENCY;
+        if (device_type == "CPU")
+            config[ov::inference_num_threads.name()] = num_threads;
+
         // Compile the model for the target device
         compiled_model = std::make_shared<ov::CompiledModel>(
-            core->compile_model(model, device_type));
-        logger->debug("Model compiled successfully for device: {}", device_type);
+            core->compile_model(model, device_type, config));
+        logger->debug("Model compiled for device: {} (hint={})", device_type, perf_hint);
+
+        // For throughput hint, auto-scale to the optimal number of infer requests
+        // when the caller did not explicitly set num_requests (i.e. it is still 1).
+        int actual_requests = num_requests;
+        if ((perf_hint == "throughput" || perf_hint == "cumulative_throughput") && num_requests == 1)
+        {
+            actual_requests = compiled_model->get_property(ov::optimal_number_of_infer_requests);
+            logger->info("Auto-scaled to {} infer requests (hint={})", actual_requests, perf_hint);
+        }
 
         // Stop any existing inference threads before replacing the request pool
         if (!inference_threads.empty())
@@ -175,15 +196,15 @@ extern "C" int runtime_model_loading(const char *model_path)
 
         // Create one InferRequest per worker thread
         infer_requests.clear();
-        for (int i = 0; i < num_requests; ++i)
+        for (int i = 0; i < actual_requests; ++i)
             infer_requests.emplace_back(compiled_model->create_infer_request());
-        logger->debug("Created {} infer request(s)", num_requests);
+        logger->debug("Created {} infer request(s)", actual_requests);
 
         // Start inference worker threads
         stop_inference_thread = false;
-        for (int i = 0; i < num_requests; ++i)
+        for (int i = 0; i < actual_requests; ++i)
             inference_threads.emplace_back(inference_thread_func, i);
-        logger->info("Started {} inference thread(s)", num_requests);
+        logger->info("Started {} inference thread(s)", actual_requests);
 
         return 0;
     }
@@ -358,4 +379,9 @@ extern "C" const char *runtime_version()
 extern "C" const char *runtime_name()
 {
     return "OAAX Intel Runtime (OpenVINO Native)";
+}
+
+extern "C" int runtime_get_num_infer_requests()
+{
+    return (int)infer_requests.size();
 }
