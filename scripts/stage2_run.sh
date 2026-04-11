@@ -116,8 +116,8 @@ BUILD_DIR="$RUNTIME_DIR/build"
 
 if [[ ! -f "$BUILD_DIR/yolo_test" ]]; then
     echo "  Building C++ runtime..."
-    OPENVINO_DIR="${OPENVINO_DIR:-/usr/local/lib/python3.10/dist-packages/openvino}"
-    CMAKE_BIN="${CMAKE_BIN:-/usr/bin/cmake}"
+    OPENVINO_DIR="${OPENVINO_DIR:-/opt/intel/openvino/runtime}"
+    CMAKE_BIN="${CMAKE_BIN:-/usr/local/bin/cmake}"
 
     LINK_DIR="$BUILD_DIR/openvino_links"
     mkdir -p "$LINK_DIR"
