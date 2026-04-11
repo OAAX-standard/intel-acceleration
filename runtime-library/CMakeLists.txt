@@ -231,7 +231,8 @@ else()
       "!" -name "libopenvino_tensorflow_lite_frontend*"
       "!" -name "libopenvino_paddle_frontend*"
       "!" -name "libopenvino_jax_frontend*"
-      -exec cp -P {} ${CMAKE_CURRENT_BINARY_DIR}/ ";"
+      -exec cp -P --target-directory=${CMAKE_CURRENT_BINARY_DIR} {} +
+    VERBATIM
   )
 endif()
 
