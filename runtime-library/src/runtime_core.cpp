@@ -46,7 +46,6 @@ std::shared_ptr<spdlog::logger> logger;
 // Runtime arguments
 static int log_level = spdlog::level::info;
 static string log_file = "runtime.log";
-static int num_threads = 8;
 static int num_requests = 1;
 static string device_type = "CPU";
 static string precision = "FP32";
@@ -68,14 +67,6 @@ extern "C" int runtime_initialization_with_args(int length, char **keys, void **
         else if (key == "log_file")
         {
             log_file = string(static_cast<char *>(values[i]));
-        }
-        else if (key == "num_threads")
-        {
-            num_threads = std::stoi(static_cast<char *>(values[i]));
-            if (num_threads < 1)
-                num_threads = 1;
-            else if (num_threads > 8)
-                num_threads = 8;
         }
         else if (key == "num_requests")
         {
@@ -121,7 +112,6 @@ extern "C" int runtime_initialization()
         logger->info("Runtime arguments:");
         logger->info("  log_level: {}", log_level);
         logger->info("  log_file: {}", log_file);
-        logger->info("  num_threads: {}", num_threads);
         logger->info("  num_requests: {}", num_requests);
         logger->info("  device_type: {}", device_type);
         logger->info("  precision: {}", precision);
@@ -160,7 +150,7 @@ extern "C" int runtime_model_loading(const char *model_path)
             logger->trace("Output: {}", output.get_any_name());
         }
 
-        // Build compile config: performance hint + CPU thread count
+        // Build compile config: performance hint (OpenVINO manages threads internally)
         ov::AnyMap config;
         if (perf_hint == "throughput")
             config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::THROUGHPUT;
@@ -168,8 +158,6 @@ extern "C" int runtime_model_loading(const char *model_path)
             config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::CUMULATIVE_THROUGHPUT;
         else
             config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::LATENCY;
-        if (device_type == "CPU")
-            config[ov::inference_num_threads.name()] = num_threads;
 
         // Compile the model for the target device
         compiled_model = std::make_shared<ov::CompiledModel>(
