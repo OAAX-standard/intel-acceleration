@@ -203,28 +203,18 @@ if(MSVC)
   )
 
   # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
-  # alongside RuntimeLibrary.dll. OpenVINO must be extracted before cmake runs.
-  # Using file(GLOB) + list(FILTER) at configure time and cmake -E copy_if_different
-  # at build time — avoids PowerShell/cmd.exe pipe-character escaping issues.
+  # alongside RuntimeLibrary.dll. Uses cmake -P to glob at BUILD time so the
+  # DLLs don't need to exist yet when cmake configures.
   set(OPENVINO_TBB_BIN_DIR "${OPENVINO_DIR}/3rdparty/tbb/bin")
 
-  file(GLOB OPENVINO_DLLS "${OPENVINO_BIN_DIR}/*.dll")
-  list(FILTER OPENVINO_DLLS EXCLUDE REGEX
-    "openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend")
-
-  file(GLOB TBB_DLLS "${OPENVINO_TBB_BIN_DIR}/*.dll")
-  list(FILTER TBB_DLLS EXCLUDE REGEX "_debug\\.dll$")
-
-  if(OPENVINO_DLLS OR TBB_DLLS)
-    add_custom_command(TARGET RuntimeLibrary POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${OPENVINO_DLLS} ${TBB_DLLS}
-        "$<TARGET_FILE_DIR:RuntimeLibrary>/"
-      VERBATIM
-    )
-  else()
-    message(WARNING "No OpenVINO/TBB DLLs found at configure time — package will be incomplete.")
-  endif()
+  add_custom_command(TARGET RuntimeLibrary POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      "-DSRC_BIN_DIR=${OPENVINO_BIN_DIR}"
+      "-DSRC_TBB_DIR=${OPENVINO_TBB_BIN_DIR}"
+      "-DDST_DIR=$<TARGET_FILE_DIR:RuntimeLibrary>"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_windows_dlls.cmake"
+    VERBATIM
+  )
 else()
   target_link_libraries(RuntimeLibrary PUBLIC
     -Wl,--start-group
