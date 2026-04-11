@@ -9,7 +9,7 @@ description = "OAAX Intel Acceleration Conversion Toolchain - OpenVINO Native wi
 authors = [
     {name = "Ayoub Assis", email = "aassis@networkoptix.com"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.13"
 dependencies = [
     "openvino>=2026.1.0",
     "lgg",
