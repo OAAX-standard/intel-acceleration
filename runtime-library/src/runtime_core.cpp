@@ -171,13 +171,14 @@ extern "C" int runtime_model_loading(const char *model_path)
             core->compile_model(model, device_type, config));
         logger->debug("Model compiled for device: {} (hint={})", device_type, perf_hint);
 
-        // For throughput hint, auto-scale to the optimal number of infer requests
-        // when the caller did not explicitly set num_requests (i.e. it is still 1).
+        // Always infer the optimal worker count from the compiled model unless the
+        // caller explicitly overrode num_requests. OpenVINO returns 1 for LATENCY
+        // and N streams for THROUGHPUT/CUMULATIVE_THROUGHPUT automatically.
         int actual_requests = num_requests;
-        if ((perf_hint == "throughput" || perf_hint == "cumulative_throughput") && num_requests == 1)
+        if (num_requests == 1)
         {
             actual_requests = compiled_model->get_property(ov::optimal_number_of_infer_requests);
-            logger->info("Auto-scaled to {} infer requests (hint={})", actual_requests, perf_hint);
+            logger->info("Optimal infer requests for hint={}: {}", perf_hint, actual_requests);
         }
 
         // Stop any existing inference threads and drain the old pool before replacing
