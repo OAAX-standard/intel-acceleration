@@ -207,10 +207,12 @@ if(MSVC)
   # Done at build time via PowerShell so the archive must exist before building.
   set(OPENVINO_TBB_BIN_DIR "${OPENVINO_DIR}/3rdparty/tbb/bin")
   add_custom_command(TARGET RuntimeLibrary POST_BUILD
+    # Where-Object uses the simplified property syntax (no script block / curly braces)
+    # to avoid MSBuild misinterpreting {} as property function delimiters.
     COMMAND PowerShell -NoProfile -Command
-      "Get-ChildItem '${OPENVINO_BIN_DIR}' -Filter *.dll | Where-Object { $_.Name -notmatch 'openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend' } | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
+      "Get-ChildItem '${OPENVINO_BIN_DIR}' -Filter *.dll | Where-Object Name -notmatch 'openvino_onnx_frontend|openvino_pytorch_frontend|openvino_tensorflow_frontend|openvino_tensorflow_lite_frontend|openvino_paddle_frontend' | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
     COMMAND PowerShell -NoProfile -Command
-      "Get-ChildItem '${OPENVINO_TBB_BIN_DIR}' -Filter *.dll | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
+      "Get-ChildItem '${OPENVINO_TBB_BIN_DIR}' -Filter *.dll | Where-Object Name -notmatch '_debug' | Copy-Item -Destination '$<TARGET_FILE_DIR:RuntimeLibrary>'"
     VERBATIM
   )
 else()
