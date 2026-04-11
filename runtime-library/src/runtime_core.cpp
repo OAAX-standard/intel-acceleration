@@ -4,6 +4,8 @@
 #include <numeric>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,6 +44,34 @@ static std::atomic<bool> pool_active{false};
 // Free InferRequest slot pool: holds indices into infer_requests[] for idle slots.
 // Manager dequeues a slot before dispatching; callback re-enqueues it on completion.
 static moodycamel::ConcurrentQueue<int> free_requests;
+
+// Semaphore that tracks the number of available slots.
+// Manager blocks on acquire() instead of busy-sleeping; callback calls release().
+// C++17-compatible (std::counting_semaphore requires C++20).
+class Semaphore {
+    std::mutex mtx;
+    std::condition_variable cv;
+    int count{0};
+public:
+    void release() {
+        { std::lock_guard<std::mutex> lk(mtx); ++count; }
+        cv.notify_one();
+    }
+    void release_n(int n) {
+        { std::lock_guard<std::mutex> lk(mtx); count += n; }
+        cv.notify_all();
+    }
+    void acquire() {
+        std::unique_lock<std::mutex> lk(mtx);
+        cv.wait(lk, [this] { return count > 0; });
+        --count;
+    }
+    void reset() {
+        std::lock_guard<std::mutex> lk(mtx);
+        count = 0;
+    }
+};
+static Semaphore slot_semaphore;
 
 // Session variables
 static vector<string> output_names;
@@ -166,8 +196,9 @@ extern "C" int runtime_model_loading(const char *model_path)
         stop_and_join_manager();
         drain_output_pool();
 
-        // Drain stale free_requests indices from the previous model session.
+        // Drain stale state from the previous model session.
         { int idx; while (free_requests.try_dequeue(idx)) {} }
+        slot_semaphore.reset();
 
         // Create one InferRequest per slot.
         infer_requests.clear();
@@ -218,9 +249,10 @@ extern "C" int runtime_model_loading(const char *model_path)
             logger->info("Dynamic output shapes — buffer pool disabled, using malloc per inference");
         }
 
-        // Populate the free-slot queue with all InferRequest indices.
+        // Populate the free-slot queue and semaphore with all InferRequest indices.
         for (int i = 0; i < actual_requests; ++i)
             free_requests.enqueue(i);
+        slot_semaphore.release_n(actual_requests);
 
         // Start the single manager thread.
         stop_manager = false;
@@ -265,17 +297,15 @@ static void manager_thread_func()
 
         logger->debug("[manager] Input dequeued, waiting for free slot.");
 
-        // Wait for a free InferRequest slot.
-        int idx = -1;
-        while (!free_requests.try_dequeue(idx))
+        // Block until a slot is available (woken immediately by the callback's release()).
+        slot_semaphore.acquire();
+        if (stop_manager)
         {
-            if (stop_manager)
-            {
-                deep_free_tensors_struct(input);
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            deep_free_tensors_struct(input);
+            return;
         }
+        int idx = -1;
+        free_requests.try_dequeue(idx); // guaranteed to succeed after acquire()
 
         logger->debug("[manager] Dispatching to slot {}.", idx);
 
@@ -361,8 +391,9 @@ static void manager_thread_func()
                 logger->debug("[slot {}] Output enqueued.", idx);
             }
 
-            // Return this slot to the free pool.
+            // Return this slot to the free pool and wake the manager immediately.
             free_requests.enqueue(idx);
+            slot_semaphore.release();
         });
 
         req.start_async();
@@ -374,6 +405,7 @@ static void manager_thread_func()
 static void stop_and_join_manager()
 {
     stop_manager = true;
+    slot_semaphore.release(); // unblock manager if it's waiting for a slot
     if (manager_thread.joinable())
         manager_thread.join();
 
@@ -430,6 +462,7 @@ extern "C" int runtime_destruction()
 
     // Drain stale free_requests indices before clearing the vector.
     { int idx; while (free_requests.try_dequeue(idx)) {} }
+    slot_semaphore.reset();
 
     infer_requests.clear();
     logger->trace("Freed OpenVINO infer requests.");
