@@ -189,16 +189,11 @@ model.zip
 // Global variables
 static std::shared_ptr<ov::Core> core;
 static std::shared_ptr<ov::CompiledModel> compiled_model;
-static std::shared_ptr<ov::InferRequest> infer_request;
 
 extern "C" int runtime_initialization() {
     try {
         // Create OpenVINO Core
         core = std::make_shared<ov::Core>();
-
-        // Configure CPU device (example)
-        core->set_property("CPU", ov::inference_num_threads(8));
-
         return 0;  // Success
     }
     catch (const std::exception &e) {
@@ -210,8 +205,8 @@ extern "C" int runtime_initialization() {
 
 **Key Points:**
 - `ov::Core` is the main entry point
-- Use `set_property()` for device configuration
-- Properties are device-specific (CPU, GPU, NPU)
+- **DO NOT** call `core->set_property("CPU", ov::inference_num_threads(N))` when using a performance hint — it conflicts with OpenVINO's internal scheduler and hurts throughput
+- Let `perf_hint` alone control thread allocation
 
 ### Pattern: Load and Compile Model
 
@@ -313,20 +308,102 @@ void perform_inference(tensors_struct *input_tensors) {
 - `get_tensor()` returns output without copy
 - Must copy output data if ownership needed
 
-### Pattern: Asynchronous Inference (Optional)
+### Pattern: Async Inference — Manager Thread + Semaphore Dispatch
+
+This is the pattern used in production (`runtime_core.cpp`). One manager thread dispatches work; OpenVINO's own threads execute inference and fire the completion callback.
 
 ```cpp
-// Start async inference
-infer_request->start_async();
+#include <semaphore.h>
 
-// Do other work...
+static sem_t slot_sem;   // counts free InferRequest slots
+static sem_t input_sem;  // signals that send_input() enqueued a new item
 
-// Wait for completion
-infer_request->wait();
+struct SlotState {
+    tensors_struct *input{nullptr};
+    tensors_struct *output{nullptr};
+    bool from_pool{false};
+};
+static std::vector<SlotState> slot_states;
 
-// Get results
-ov::Tensor output = infer_request->get_tensor(output_name);
+// Register callback ONCE per slot at model load (not per inference).
+// Lambda captures only int i (4 bytes) — fits std::function's SOO buffer,
+// avoiding a heap allocation on every inference.
+for (int i = 0; i < actual_requests; ++i) {
+    infer_requests[i].set_callback([i](std::exception_ptr ex) {
+        on_inference_complete(i, ex);
+    });
+}
+
+// Manager thread: blocks on semaphores, never polls/sleeps.
+static void manager_thread_func() {
+    while (true) {
+        while (sem_wait(&input_sem) == -1 && errno == EINTR) continue;
+        if (stop_manager) return;
+        tensors_struct *input = nullptr;
+        input_tensors_queue.try_dequeue(input);
+
+        while (sem_wait(&slot_sem) == -1 && errno == EINTR) continue;
+        if (stop_manager) { deep_free_tensors_struct(input); return; }
+        int idx = -1;
+        free_requests.try_dequeue(idx);
+
+        // Set outputs (zero-copy pool path) and inputs, then dispatch.
+        slot_states[idx] = {input, output, from_pool};
+        infer_requests[idx].start_async();
+    }
+}
+
+// Completion callback: reads per-slot state, enqueues result, frees slot.
+static void on_inference_complete(int idx, std::exception_ptr ex) {
+    SlotState &s = slot_states[idx];
+    // use s.input, s.output, s.from_pool
+    output_tensors_queue.try_enqueue(s.output);
+    free_requests.enqueue(idx);
+    sem_post(&slot_sem);  // return slot to the pool
+}
+
+// send_input wakes the manager immediately — no 1ms sleep.
+extern "C" int send_input(tensors_struct *input) {
+    input_tensors_queue.try_enqueue(input);
+    sem_post(&input_sem);
+    return 0;
+}
 ```
+
+**Key Points:**
+- `sem_t` (POSIX, futex-backed) is lighter than `std::mutex` + `std::condition_variable` — 1 syscall vs 2 in the contended path
+- Per-slot `SlotState` avoids capturing large data in the lambda — keeping it inside std::function's small-object buffer
+- `set_callback()` once at model load, not once per inference — eliminates repeated std::function construction
+- FIFO ordering is NOT guaranteed when `actual_requests > 1`
+
+### Pattern: Zero-Copy Output with set_output_tensor
+
+Before calling `start_async()`, redirect the InferRequest's output directly into a pre-allocated pool buffer. OpenVINO writes inference results in-place — no memcpy in the callback.
+
+```cpp
+// Pre-allocate pool buffers (once at model load).
+struct OutInfo { ov::Shape shape; ov::element::Type ov_type; size_t byte_size; };
+static std::vector<OutInfo> pool_out_infos;
+// ... fill pool_out_infos from compiled_model->output(name) ...
+
+// Before each start_async():
+tensors_struct *output = /* dequeue from output_buffer_pool */;
+for (size_t i = 0; i < output_names.size(); ++i)
+    req.set_output_tensor(i, ov::Tensor(pool_out_infos[i].ov_type,
+                                        pool_out_infos[i].shape,
+                                        output->data[i]));
+
+// In the completion callback: output is already filled — just enqueue it.
+output_tensors_queue.try_enqueue(s.output);
+
+// Caller must return buffers to the pool instead of deep_free:
+runtime_return_output(output);  // puts it back in output_buffer_pool
+```
+
+**Key Points:**
+- Only works for static output shapes (dynamic shapes fall back to memcpy)
+- Pool size: `actual_requests × 4` gives enough slack at high FPS without wasting memory
+- Callers MUST use `runtime_return_output()` instead of `deep_free_tensors_struct()`
 
 ---
 
@@ -986,20 +1063,21 @@ def test_tensorflow_conversion(sample_tf_model, temp_dir):
 ### Recipe: Add Device-Specific Optimization
 
 ```cpp
-// runtime_core.cpp
-void configure_device_properties(const std::string& device) {
-    if (device == "CPU") {
-        core->set_property("CPU", ov::inference_num_threads(num_threads));
-        core->set_property("CPU", ov::enable_profiling(false));
-    }
-    else if (device == "GPU") {
-        core->set_property("GPU", ov::hint::performance_mode(ov::hint::PerformanceMode::THROUGHPUT));
-        core->set_property("GPU", ov::hint::inference_precision(ov::element::f16));
-    }
-    else if (device == "NPU") {
-        core->set_property("NPU", ov::intel_npu::compilation_mode_params(""));
-    }
-}
+// runtime_core.cpp — pass performance hint at compile_model() time.
+// DO NOT set ov::inference_num_threads alongside a perf_hint — they conflict.
+ov::AnyMap config;
+if (perf_hint == "throughput")
+    config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::THROUGHPUT;
+else if (perf_hint == "cumulative_throughput")
+    config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::CUMULATIVE_THROUGHPUT;
+else
+    config[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::LATENCY;
+
+compiled_model = std::make_shared<ov::CompiledModel>(
+    core->compile_model(model, device_type, config));
+
+// Query OpenVINO for the optimal number of InferRequests given the hint:
+int actual_requests = compiled_model->get_property(ov::optimal_number_of_infer_requests);
 ```
 
 ---
@@ -1015,12 +1093,16 @@ void configure_device_properties(const std::string& device) {
 - `nncf.quantize(model, dataset)` - INT8 quantization
 
 **C++:**
-- `ov::Core()` - Initialize OpenVINO
-- `core->read_model(path)` - Load IR model
-- `core->compile_model(model, device)` - Compile
-- `compiled->create_infer_request()` - Create inference
-- `request->infer()` - Run inference
-- `request->get_tensor(name)` - Get result
+- `ov::Core()` — Initialize OpenVINO
+- `core->read_model(path)` — Load IR model
+- `core->compile_model(model, device, config)` — Compile with perf hint
+- `compiled->get_property(ov::optimal_number_of_infer_requests)` — Query optimal N
+- `compiled->create_infer_request()` — Create inference slot
+- `request->set_tensor(name, ov::Tensor(type, shape, ptr))` — Zero-copy input
+- `request->set_output_tensor(i, ov::Tensor(type, shape, ptr))` — Zero-copy output (static shapes only)
+- `request->set_callback(fn)` — Register async completion callback (do this once at load, not per inference)
+- `request->start_async()` — Fire async inference
+- `request->wait()` — Block until complete (use in cleanup, not hot path)
 
 ### Common Issues & Solutions
 
