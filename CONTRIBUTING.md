@@ -71,7 +71,29 @@ Ensure you have the following minimum versions installed:
 - Python 3.8+ (if you work with Python scripts)
 - Any OS prerequisites (Ubuntu 22.04)
 
-### 4. Build locally
+### 4. Install pre-commit hooks
+
+Pre-commit runs all linters and formatters locally before each commit, catching
+style issues before they reach CI.
+
+```bash
+# One-time setup (from repo root, inside the venv)
+pip install pre-commit
+pre-commit install
+```
+
+After this, every `git commit` automatically runs:
+- **ruff** — Python lint + format
+- **clang-format** — C++ format (Google style, 120-char limit)
+- **shellcheck** — Shell script lint
+- **hadolint** — Dockerfile lint
+
+To run all checks manually across the whole repo:
+```bash
+pre-commit run --all-files
+```
+
+### 6. Build locally
 
 For example, to build the runtime library:
 
@@ -89,14 +111,14 @@ cd conversion-toolchain
 IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
 ```
 
-### 5. IDE / Editor recommendation
+### 7. IDE / Editor recommendation
 
 - Use Visual Studio Code or CLion.
 - Enable “format on save” with the style guide below.
 - Configure the include paths to the **runtime-library/include** folder and link to **artifacts**.
 - Use the built-in debugger for stepping through runtime code.
 
-### 6. Troubleshooting & common issues
+### 8. Troubleshooting & common issues
 
 - If Docker build fails, verify you have sufficient permissions and available disk space.
 - If CMake cannot locate OpenVINO, set the `OPENVINO_DIR` environment variable to the
