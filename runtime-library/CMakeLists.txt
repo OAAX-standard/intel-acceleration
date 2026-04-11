@@ -112,11 +112,12 @@ if(NOT MSVC)
   set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -Wno-missing-field-initializers -Wno-attribute-warning")
   set(CMAKE_BUILD_FLAGS "${CMAKE_BUILD_FLAGS} -fdata-sections -ffunction-sections -Wl,--gc-sections -fno-exceptions")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wformat -Wformat-security -fdata-sections -ffunction-sections -Wl,--gc-sections")
-  # OpenVINO Python package libs use the pre-C++11 ABI (old std::string).
-  # Without this flag the cross-compiler generates __cxx11 symbols that don't match.
+  # The OpenVINO archive is built for Ubuntu 22.04 and uses the new C++11 ABI
+  # (_GLIBCXX_USE_CXX11_ABI=1, the default). Do NOT force the old ABI here —
+  # doing so would mangle std::string differently and cause ov:: symbol mismatches.
   set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -D_GLIBCXX_USE_CXX11_ABI=0")
-  set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -D_GLIBCXX_USE_CXX11_ABI=0")
+  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
+  set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
 endif()
 
 # === Generic Build Settings ===
@@ -141,6 +142,10 @@ add_library(RuntimeLibrary SHARED ${SRC})
 
 if(NOT MSVC)
   target_link_options(RuntimeLibrary PRIVATE "-Wl,-z,noexecstack")
+  # Cross-compilation: the target system (Ubuntu 22.04) has GLIBC 2.32-2.34 and
+  # TBB, but the cross-compiler sysroot does not. Allow unresolved shared-library
+  # symbols so the linker doesn't fail — they are satisfied at runtime.
+  target_link_options(RuntimeLibrary PRIVATE "-Wl,--allow-shlib-undefined")
 endif()
 
 # === Optimization Flags ===
@@ -180,9 +185,12 @@ target_include_directories(RuntimeLibrary PUBLIC
 if(NOT DEFINED OPENVINO_LINK_DIR)
   set(OPENVINO_LINK_DIR ${OPENVINO_LIB_DIR})
 endif()
+# TBB is bundled in the archive at runtime/3rdparty/tbb/lib/
+set(OPENVINO_TBB_LIB_DIR "${OPENVINO_DIR}/3rdparty/tbb/lib")
 target_link_directories(RuntimeLibrary PUBLIC
   ${OPENVINO_LINK_DIR}
   ${OPENVINO_LIB_DIR}
+  ${OPENVINO_TBB_LIB_DIR}
 )
 
 # === Link Libraries ===
@@ -222,8 +230,11 @@ set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
 foreach(TEST_NAME simple_test yolo_test)
   add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
   target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
-  target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR})
+  target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
   target_link_libraries(${TEST_NAME} PRIVATE RuntimeLibrary)
+  if(NOT MSVC)
+    target_link_options(${TEST_NAME} PRIVATE "-Wl,--allow-shlib-undefined")
+  endif()
   # Ensure test binary finds the shared libraries in the same directory at runtime
   set_target_properties(${TEST_NAME} PROPERTIES
     BUILD_RPATH "$ORIGIN"
