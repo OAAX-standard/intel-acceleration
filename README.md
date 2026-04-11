@@ -8,7 +8,7 @@ This folder contains the source code of the shared library and the Docker image 
 
 - [conversion-toolchain/](conversion-toolchain): OAAX conversion toolchain — converts ONNX models to OpenVINO IR (FP32/FP16/INT8).
 - [runtime-library/](runtime-library): OAAX runtime library — C++ shared library for OpenVINO inference on Intel CPU/GPU/NPU.
-- [tests/](tests): All tests. Conversion unit tests, YOLO integration tests, Docker tests, and C++ runtime tests.
+- [tests/](tests): Conversion unit tests, YOLO integration tests, Docker tests, and C++ runtime tests.
 - [scripts/](scripts): Two-stage test runner (`stage1_compile.sh`, `stage2_run.sh`).
 
 ## Building
@@ -38,55 +38,54 @@ uv sync --extra integration --extra quantization
 
 ### Stage 1 — Compile models + run conversion tests
 
-Converts YOLOv8n and YOLOv11n to FP32/FP16/INT8 OpenVINO IR (cached in `tests/compiled_models/`), then runs all conversion tests.
+Converts YOLOv8n and YOLOv11n to FP32/FP16/INT8 OpenVINO IR (cached in `tests/compiled_models/`), then runs all conversion and IR validation tests.
 
 ```bash
 bash scripts/stage1_compile.sh
 ```
 
-Runs: `tests/test_conversion.py` (toolchain unit tests) + `tests/test_yolo_integration.py` (IR validation).
-
 ### Stage 2 — Benchmark + runtime validation
 
-Uses compiled models from Stage 1. Requires the C++ runtime to be built.
+Uses compiled models from Stage 1. Builds the C++ runtime automatically if needed.
 
 ```bash
 bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 ```
 
-- Runs `benchmark_app` (latency hint, p95) across all models × precision variants × devices.
-- Runs the C++ `yolo_test` binary (OAAX runtime, warmup + 30 runs, avg/min/p95 reported).
-- With `--csv results.csv`: appends all results to a CSV for cross-run comparison.
+- **Step 1:** Runs `benchmark_app` (throughput hint, p95) across all models × precision variants × devices.
+- **Step 2:** Runs the C++ `yolo_test` binary (throughput hint, warmup + 30 runs) across all variants × devices.
+- `--csv results.csv` appends all results for cross-run comparison.
 
 ### Individual pytest suites
 
 ```bash
-pytest tests/test_conversion.py -v       # toolchain unit tests (no GPU needed)
+pytest tests/test_conversion.py -v       # toolchain unit tests
 pytest tests/test_yolo_integration.py -v # YOLO IR validation (uses cached models)
 pytest tests/test_docker.py -v           # Docker tests (image must be built first)
 ```
 
-### C++ runtime smoke test
+### C++ runtime smoke tests
 
 ```bash
 cd runtime-library/build
-./simple_test                             # no model needed
-./yolo_test /path/to/model.xml [device] [--runs N] [--warmup N]
+./simple_test
+./yolo_test /path/to/model.xml [device] [--runs N] [--warmup N] [--num-requests N] [--perf-hint latency|throughput]
 ```
 
-## Benchmark results (reference, Intel Core i7-13700K + Intel UHD 770)
+## Benchmark results (reference, Intel Core i7-13700K)
 
-| Model | Precision | Device | Avg latency | p95 | Throughput |
-|-------|-----------|--------|-------------|-----|------------|
-| YOLOv8n | FP32 | CPU | 13.8 ms | 14.5 ms | 71.6 FPS |
-| YOLOv8n | FP16 | CPU | 13.5 ms | 14.0 ms | 72.9 FPS |
-| YOLOv8n | INT8 | CPU | **5.2 ms** | 5.6 ms | **187 FPS** |
-| YOLOv8n | FP32 | GPU.0 (iGPU) | ~12 ms | — | ~80 FPS |
-| YOLOv8n | INT8 | GPU.0 (iGPU) | ~8 ms | — | ~116 FPS |
+Measured with `benchmark_app -hint throughput` and `yolo_test --perf-hint throughput`.
 
-Numbers measured with `benchmark_app -hint latency`. INT8 is ~2.5× faster than FP32 on CPU via AVX-512 VNNI.
+| Tool | Model | Precision | Device | Throughput |
+|------|-------|-----------|--------|------------|
+| benchmark_app | yolo11n | FP32 | CPU | ~102 FPS |
+| benchmark_app | yolo11n | FP16 | CPU | ~102 FPS |
+| benchmark_app | yolo11n | INT8 | CPU | **~255 FPS** |
+| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~100 FPS |
+| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~95 FPS |
+| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~231 FPS |
 
-> **Note on `yolo_test` latency:** The C++ runtime uses an async queue (`send_input` → background thread → `receive_output`). The ~100 ms measured by `yolo_test` includes queue round-trip overhead, not just inference time. Use `benchmark_app` for pure inference latency.
+The OAAX runtime matches `benchmark_app` within ~1% for FP32/FP16. The ~9% INT8 gap is the cost of the mandatory output `memcpy` in the OAAX abstraction layer (~2.8 MB per inference). `benchmark_app` reads tensors in-place with no copy.
 
 ## Pre-built OAAX artifacts
 

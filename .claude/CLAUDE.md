@@ -26,15 +26,13 @@ cd conversion-toolchain
 IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
 ```
 
-The script builds the Docker image and runs `--help` to verify. Default image name is `openvino-converter:latest` unless overridden via `IMAGE_NAME`/`IMAGE_TAG` env vars.
-
 ### Runtime Library (C++)
 
 Requires cross-compilation toolchain at `/opt/x86_64-unknown-linux-gnu-gcc-9.5.0` and OpenVINO installed (defaults to `/usr/local/lib/python3.10/dist-packages/openvino`).
 
 ```bash
 cd runtime-library
-OPENVINO_DIR=/path/to/openvino bash build-runtimes.sh  # OPENVINO_DIR is optional if default is correct
+OPENVINO_DIR=/path/to/openvino bash build-runtimes.sh
 ```
 
 Output: `runtime-library/artifacts/X86_64/` and `runtime-library-X86_64.tar.gz`.
@@ -44,23 +42,21 @@ Output: `runtime-library/artifacts/X86_64/` and `runtime-library-X86_64.tar.gz`.
 ```bash
 # One-time setup
 uv venv && source .venv/bin/activate
-uv sync                                 # unit + conversion tests
-uv sync --extra integration            # + YOLO integration tests
+uv sync --extra integration --extra quantization
 
-# Run
-pytest tests/test_conversion.py -v                         # conversion unit tests
-pytest tests/test_docker.py -v                             # Docker tests (image must be built)
-pytest tests/test_yolo_integration.py -v                   # YOLO pipeline tests
-pytest tests/test_conversion.py::TestClass::test_name -v   # single test
+# Python tests
+pytest tests/test_conversion.py -v
+pytest tests/test_docker.py -v           # image must be built
+pytest tests/test_yolo_integration.py -v
 
-# Full E2E (toolchain + C++ runtime)
-bash scripts/run_integration_tests.sh
-bash scripts/run_integration_tests.sh --skip-runtime       # Python only
-bash scripts/run_integration_tests.sh --device GPU         # test on GPU
+# Two-stage E2E
+bash scripts/stage1_compile.sh
+bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
 # C++ runtime tests (after building runtime)
 cd runtime-library/build && ./simple_test
-cd runtime-library/build && ./yolo_test <model.xml>
+cd runtime-library/build && ./yolo_test <model.xml> [device] [--runs N] [--warmup N] \
+    [--num-requests N] [--perf-hint latency|throughput]
 ```
 
 ---
@@ -87,17 +83,29 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 - `include/runtime_core.hpp` — public C API (OAAX interface)
 - `deps/` — vendored: spdlog, concurrentqueue, nlohmann/json, c-utilities
 
-**Inference architecture:** Async — `send_input()` enqueues to `input_tensors_queue`; background thread dequeues, runs `infer_request->infer()`, and enqueues results to `output_tensors_queue`; `receive_output()` dequeues results. Both queues use `moodycamel::ConcurrentQueue`.
+**Inference architecture:**
+- N worker threads (one per `ov::InferRequest`) all compete on `input_tensors_queue`
+- Each worker runs its own `req.infer()` exclusively — no sharing between workers
+- Workers write output into a pre-allocated buffer pool (no malloc on hot path)
+- Results enqueue to `output_tensors_queue`; caller polls via `receive_output()`
+- FIFO ordering is NOT guaranteed when N > 1
 
 **Runtime initialization args** (passed via `runtime_initialization_with_args`):
 
 | Key | Default | Notes |
 |-----|---------|-------|
 | `device_type` | `"CPU"` | `"CPU"`, `"GPU"`, `"NPU"` |
-| `num_threads` | `8` | 1–8, CPU only |
-| `precision` | `"FP32"` | Informational |
-| `log_level` | `info` | spdlog level int |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time |
+| `num_requests` | `1` | Worker count; if `perf_hint=throughput` and this is `1`, auto-scales to `OPTIMAL_NUMBER_OF_INFER_REQUESTS` |
+| `precision` | `"FP32"` | Informational only |
+| `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |
+
+**Key public API additions beyond the base OAAX spec:**
+- `runtime_return_output(tensors_struct*)` — return a received output buffer to the pool instead of calling `deep_free_tensors_struct`. Callers SHOULD use this for correct pool reuse. Falls back to `deep_free_tensors_struct` when the pool is not active (dynamic shapes).
+
+**Output buffer pool:**
+After model loading, if all output shapes are static, the runtime pre-allocates `actual_requests × 4` `tensors_struct` objects. Workers memcpy into these — no malloc/free on the hot path. Eliminates mmap/munmap syscalls from large allocation calls, which is significant at INT8 speeds (~255 FPS).
 
 ### CMake Build
 
@@ -111,6 +119,7 @@ CMake requires `-DPLATFORM=X86_64 -DRUNTIME_VERSION=<ver> -DOPENVINO_DIR=<path>`
 - **Preserve exit codes** — automation depends on them
 - **Toolchain input must be a zip** containing `model.onnx` (`.onnx` bare file also accepted per OAAX spec)
 - **Runtime loads `.xml` files** (OpenVINO IR); the `.bin` file must be co-located
+- **Do not set `ov::inference_num_threads` alongside a performance hint** — it constrains OpenVINO's internal scheduler. `perf_hint` alone is sufficient.
 
 ---
 
