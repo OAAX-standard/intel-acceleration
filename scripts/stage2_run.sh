@@ -121,17 +121,36 @@ if [[ ! -f "$BUILD_DIR/yolo_test" ]]; then
 
     LINK_DIR="$BUILD_DIR/openvino_links"
     mkdir -p "$LINK_DIR"
-    for lib in "$OPENVINO_DIR/libs/"*.so.*; do
-        base=$(basename "$lib")
-        ln -sf "$lib" "$LINK_DIR/${base%%\.*}.so" 2>/dev/null || true
-    done
+
+    # CMakeLists.txt expects the archive layout (lib/intel64/).
+    # pip-installed OpenVINO uses libs/ instead — synthesise the expected layout.
+    if [[ ! -d "$OPENVINO_DIR/lib/intel64" ]] && [[ -d "$OPENVINO_DIR/libs" ]]; then
+        echo "  Detected pip-layout OpenVINO; synthesising archive layout in $LINK_DIR..."
+        mkdir -p "$LINK_DIR/lib/intel64" "$LINK_DIR/3rdparty/tbb/lib"
+        [[ -e "$LINK_DIR/include" ]] || ln -s "$OPENVINO_DIR/include" "$LINK_DIR/include"
+        for lib in "$OPENVINO_DIR/libs/"*.so.*; do
+            [[ -f "$lib" ]] || continue
+            base=$(basename "$lib")
+            ln -sf "$lib" "$LINK_DIR/lib/intel64/$base"          2>/dev/null || true
+            ln -sf "$lib" "$LINK_DIR/lib/intel64/${base%%.*}.so" 2>/dev/null || true
+            ln -sf "$lib" "$LINK_DIR/${base%%.*}.so"             2>/dev/null || true
+        done
+        CMAKE_OPENVINO_DIR="$LINK_DIR"
+    else
+        for lib in "$OPENVINO_DIR/lib/intel64/"*.so.*; do
+            [[ -f "$lib" ]] || continue
+            base=$(basename "$lib")
+            ln -sf "$lib" "$LINK_DIR/${base%%.*}.so" 2>/dev/null || true
+        done
+        CMAKE_OPENVINO_DIR="$OPENVINO_DIR"
+    fi
 
     mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
     "$CMAKE_BIN" .. \
         -DPLATFORM=X86_64 \
         -DCMAKE_BUILD_TYPE=Release \
         -DRUNTIME_VERSION="$(cat "$ROOT_DIR/VERSION")" \
-        -DOPENVINO_DIR="$OPENVINO_DIR" \
+        -DOPENVINO_DIR="$CMAKE_OPENVINO_DIR" \
         -DOPENVINO_LINK_DIR="$(realpath "$LINK_DIR")"
     make -j"$(nproc)" yolo_test simple_test
     cd "$ROOT_DIR"
