@@ -12,7 +12,7 @@ apt-get install -y wget curl build-essential execstack patchelf
 
 # Define an array of URLs for downloading toolchains
 toolchain_urls=(
-    "https://oaax.nbg1.your-objectstorage.com/toolchains/x86_64-unknown-linux-gnu-gcc-9.5.0.tar.gz"
+    "https://oaax.nbg1.your-objectstorage.com/toolchains/x86_64-unknown-linux-gnu-gcc-9.5.0.tar.gz" # check-secrets-ignore: public download URL, no credentials
 )
 
 # Function to extract the filename from a given URL

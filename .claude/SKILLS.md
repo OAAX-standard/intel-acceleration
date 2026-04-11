@@ -14,6 +14,7 @@ This document contains concrete examples and patterns for working on the Intel A
 6. [CMake Patterns](#cmake-patterns)
 7. [Type Mapping Patterns](#type-mapping-patterns)
 8. [Memory Management Patterns](#memory-management-patterns)
+9. [Secret & Confidentiality Scanning](#secret--confidentiality-scanning)
 
 ---
 
@@ -1211,5 +1212,72 @@ logger->info("Expected type: {}", input_type);
 ```
 
 ---
+
+## Secret & Confidentiality Scanning
+
+Run this check before every commit, PR review, and before sharing any file externally. The script is at `scripts/check-secrets.sh`.
+
+### What to scan for
+
+| Category | Examples |
+|----------|---------|
+| **Credentials** | AWS/S3 keys, passwords, tokens, API keys |
+| **Endpoints** | Internal storage URLs, private hostnames |
+| **Proprietary data** | Model weights committed by accident (`.pt`, `.onnx`, `.bin` >1 MB) |
+| **Private config** | `.env` files, `~/.s3cfg`, private certificates |
+| **PII** | Email addresses, names in test data |
+
+### Pattern: How to run the scan
+
+```bash
+# Scan the whole working tree (respects .gitignore)
+bash scripts/check-secrets.sh
+
+# Scan only staged files (pre-commit use)
+bash scripts/check-secrets.sh --staged
+
+# Scan a specific file or directory
+bash scripts/check-secrets.sh path/to/file
+```
+
+### What the script checks
+
+1. **Hardcoded secrets** — regex patterns for common secret shapes (AWS keys, generic tokens, passwords in assignments)
+2. **Sensitive filenames** — `.env`, `*.pem`, `*.key`, `credentials*`, `secrets*`
+3. **Large binary files** — model weights, `.bin` files over 1 MB that should never be committed
+4. **S3/storage endpoints** — literal hostnames from `~/.s3cfg` or CI secrets that must stay in GitHub Secrets only
+5. **Internal URLs** — `nbg1.your-objectstorage.com` and similar private storage endpoints hardcoded in source
+
+### Project-specific confidential items
+
+The following must NEVER appear in source files or logs:
+
+- `S3_ACCESS_KEY` / `S3_SECRET_KEY` values — must only be in GitHub repository secrets
+- `S3_ENDPOINT_URL` value (`nbg1.your-objectstorage.com`) — acceptable as a hostname pattern but not combined with credentials
+- Bucket name `oaax` — public knowledge, but don't log alongside credentials
+- Any NNCF calibration dataset contents — may contain proprietary images
+- Model weights (`.pt`, `.onnx` files) — large, may be proprietary; confirmed excluded in `.gitignore`
+
+### False positive handling
+
+Add inline suppression with a comment if a match is a known false positive:
+
+```python
+# nosec: test fixture, not a real credential
+DUMMY_KEY = "AKIAIOSFODNN7EXAMPLE"
+```
+
+```bash
+# check-secrets-ignore: internal test URL, not a real endpoint
+TEST_URL="https://fake.nbg1.your-objectstorage.com"
+```
+
+### When to escalate
+
+If the scan finds a real secret that was already committed:
+1. Do NOT just delete it in a new commit — the secret is in git history
+2. Rotate the credential immediately (invalidate the old one)
+3. Use `git filter-repo` or BFG to purge the secret from history
+4. Force-push only after the credential is rotated
 
 This guide provides concrete patterns for common tasks. Refer to CLAUDE.md for project context and workflow guidance.
