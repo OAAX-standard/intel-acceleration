@@ -6,19 +6,27 @@ IMAGE_NAME="${IMAGE_NAME:-openvino-converter}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 
+# Always build from the repo root so that both VERSION and
+# conversion-toolchain/ are available in the Docker build context.
+cd "$(dirname "$0")/.."
+
+VERSION=$(cat VERSION)
+
 echo "========================================="
 echo "Building OpenVINO Conversion Toolchain"
 echo "========================================="
 echo ""
-echo "Image: ${FULL_IMAGE}"
+echo "Image   : ${FULL_IMAGE}"
+echo "Version : ${VERSION}"
 echo ""
-
-# Change to script directory
-cd "$(dirname "$0")"
 
 # Build the Docker image
 echo "Building Docker image..."
-docker build -t "${FULL_IMAGE}" .
+docker build \
+    -f conversion-toolchain/Dockerfile \
+    --build-arg VERSION="${VERSION}" \
+    -t "${FULL_IMAGE}" \
+    .
 
 # Verify the build
 echo ""

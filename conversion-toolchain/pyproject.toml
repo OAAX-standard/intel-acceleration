@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "conversion_toolchain"
-version = "0.3.0"
+dynamic = ["version"]
 description = "OAAX Intel Acceleration Conversion Toolchain - OpenVINO Native with Quantization"
 authors = [
     {name = "Ayoub Assis", email = "aassis@networkoptix.com"}
@@ -36,6 +36,9 @@ all = [
 
 [project.scripts]
 conversion_toolchain = "conversion_toolchain.main:cli"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
 
 [tool.setuptools.packages.find]
 where = ["."]

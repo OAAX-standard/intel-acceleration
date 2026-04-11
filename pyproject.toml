@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "intel-acceleration-tests"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Test suite for the OAAX Intel Acceleration runtime and conversion toolchain"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -30,6 +34,9 @@ all = ["intel-acceleration-tests[integration,quantization]"]
 Repository = "https://github.com/OAAX-standard/intel-acceleration"
 Documentation = "https://docs.oaax.org/Intel/"
 Changelog = "https://github.com/OAAX-standard/intel-acceleration/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
 
 [tool.uv.sources]
 conversion-toolchain = { path = "conversion-toolchain", editable = true }

@@ -1,17 +1,18 @@
 # OpenVINO Conversion Toolchain Docker Image
 # Converts ONNX models to OpenVINO IR format with FP16/INT8 optimizations
 #
-# Usage:
-#   docker build -t openvino-converter .
-#   docker run -v $(pwd)/input:/input -v $(pwd)/output:/output \
-#              openvino-converter /input/model.zip /output
+# Build from the repo root (build-toolchain.sh handles this automatically):
+#   docker build -f conversion-toolchain/Dockerfile \
+#                --build-arg VERSION=$(cat VERSION) \
+#                -t oaax-intel-toolchain .
 
 ARG DEBIAN_FRONTEND=noninteractive
 FROM python:3.10-slim
 
+ARG VERSION=dev
 LABEL maintainer="OAAX Standard"
 LABEL description="OpenVINO ONNX to IR Conversion Toolchain"
-LABEL version="0.3.0"
+LABEL version="${VERSION}"
 
 # Install system dependencies
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections && \
@@ -28,11 +29,15 @@ ENV PATH="/root/.local/bin:${PATH}"
 # Set working directory
 WORKDIR /app
 
+# Copy VERSION (symlink dereferenced by Docker) so pyproject.toml's
+# dynamic version ({file = "VERSION"}) resolves correctly inside the image.
+COPY conversion-toolchain/VERSION /app/VERSION
+
 # Copy only necessary files for installation (layer caching)
-COPY pyproject.toml /app/
+COPY conversion-toolchain/pyproject.toml /app/
 
 # Copy source code
-COPY conversion_toolchain /app/conversion_toolchain
+COPY conversion-toolchain/conversion_toolchain /app/conversion_toolchain
 
 # Install Python dependencies
 RUN uv pip install --system -e . && \
