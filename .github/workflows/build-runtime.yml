@@ -89,17 +89,6 @@ jobs:
       - name: Cross-compile runtimes
         run: bash runtime-library/build-runtimes.sh
 
-      - name: Upload test binaries
-        uses: actions/upload-artifact@v3
-        with:
-          name: runtime-test-binaries
-          path: |
-            runtime-library/build/simple_test
-            runtime-library/build/yolo_test
-            runtime-library/build/*.so*
-          retention-days: 1
-          if-no-files-found: error
-
       - name: Install s3cmd
         run: |
           sudo apt-get update
@@ -136,6 +125,12 @@ jobs:
           if [ "${{ github.ref }}" == "refs/heads/main" ]; then
             s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/latest/INTEL/x86_64/Ubuntu/library.tar.gz"
           fi
+
+      - name: Upload test binaries to S3
+        run: |
+          cd runtime-library/build
+          tar czf /tmp/test-binaries.tar.gz simple_test yolo_test *.so*
+          s3cmd put /tmp/test-binaries.tar.gz "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/test-binaries.tar.gz"
 
   build-runtimes-for-windows-x86_64:
     timeout-minutes: 10
@@ -219,14 +214,39 @@ jobs:
           submodules: 'recursive'
           lfs: true
 
-      - name: Download runtime test binaries
-        uses: actions/download-artifact@v3
-        with:
-          name: runtime-test-binaries
-          path: runtime-library/build/
+      - name: Install s3cmd
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y s3cmd
 
-      - name: Make binaries executable
-        run: chmod +x runtime-library/build/simple_test runtime-library/build/yolo_test
+      - name: Configure s3cmd
+        run: |
+          cat > ~/.s3cfg <<EOF
+          [default]
+          access_key = ${{ secrets.S3_ACCESS_KEY }}
+          secret_key = ${{ secrets.S3_SECRET_KEY }}
+          bucket_location = us-east-1
+          host_base = ${{ secrets.S3_ENDPOINT_URL }}
+          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
+          use_https = True
+          EOF
+
+      - name: Determine version
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            version=$(cat VERSION)
+          else
+            version=${{ github.head_ref }}
+          fi
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: Download test binaries from S3
+        run: |
+          mkdir -p runtime-library/build
+          s3cmd get "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/test-binaries.tar.gz" /tmp/test-binaries.tar.gz
+          tar xzf /tmp/test-binaries.tar.gz -C runtime-library/build/
+          chmod +x runtime-library/build/simple_test runtime-library/build/yolo_test
 
       - name: Stage 1 — convert models and run toolchain tests
         run: bash scripts/stage1_compile.sh
