@@ -232,6 +232,9 @@ else()
       "!" -name "libopenvino_paddle_frontend*"
       "!" -name "libopenvino_jax_frontend*"
       -exec cp -P --target-directory=${CMAKE_CURRENT_BINARY_DIR} {} +
+    # Copy TBB and hwloc — libopenvino.so links against them at runtime.
+    COMMAND find ${OPENVINO_TBB_LIB_DIR} -maxdepth 1 -name "*.so*"
+      -exec cp -P --target-directory=${CMAKE_CURRENT_BINARY_DIR} {} +
     VERBATIM
   )
 endif()
