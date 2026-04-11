@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: OAAX Standard Discussion
+    url: https://github.com/OAAX-standard/OAAX/discussions
+    about: General questions about the OAAX standard
+  - name: OAAX Documentation
+    url: https://docs.oaax.org/Intel/
+    about: Deployment documentation for Intel hardware

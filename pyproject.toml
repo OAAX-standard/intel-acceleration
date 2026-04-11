@@ -1,7 +1,19 @@
 [project]
 name = "intel-acceleration-tests"
 version = "0.1.0"
+description = "Test suite for the OAAX Intel Acceleration runtime and conversion toolchain"
+readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
+keywords = ["oaax", "openvino", "intel", "inference", "npu", "gpu", "quantization"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: POSIX :: Linux",
+]
 dependencies = [
     "conversion-toolchain",
     "openvino==2026.1.0",
@@ -13,6 +25,11 @@ dependencies = [
 integration = ["ultralytics>=8.3.0"]
 quantization = ["nncf>=2.19.0,<3.0.0"]
 all = ["intel-acceleration-tests[integration,quantization]"]
+
+[project.urls]
+Repository = "https://github.com/OAAX-standard/intel-acceleration"
+Documentation = "https://docs.oaax.org/Intel/"
+Changelog = "https://github.com/OAAX-standard/intel-acceleration/blob/main/CHANGELOG.md"
 
 [tool.uv.sources]
 conversion-toolchain = { path = "conversion-toolchain", editable = true }
