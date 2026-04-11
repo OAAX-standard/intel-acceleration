@@ -202,13 +202,15 @@ if(MSVC)
     ws2_32 bcrypt
   )
 
-  # Copy OpenVINO DLLs (archive layout puts them in bin/intel64/Release/)
+  # Copy OpenVINO DLLs if found (archive layout: bin/intel64/Release/)
   file(GLOB OPENVINO_DLLS "${OPENVINO_BIN_DIR}/*.dll")
-  add_custom_command(TARGET RuntimeLibrary POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    ${OPENVINO_DLLS}
-    "$<TARGET_FILE_DIR:RuntimeLibrary>/"
-  )
+  if(OPENVINO_DLLS)
+    add_custom_command(TARGET RuntimeLibrary POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${OPENVINO_DLLS}
+      "$<TARGET_FILE_DIR:RuntimeLibrary>/"
+    )
+  endif()
 else()
   target_link_libraries(RuntimeLibrary PUBLIC
     -Wl,--start-group
