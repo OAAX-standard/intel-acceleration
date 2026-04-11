@@ -75,16 +75,18 @@ Ensure you have the following minimum versions installed:
 
 For example, to build the runtime library:
 
-```runtimelib
+```bash
 cd runtime-library
-./build-runtimes.sh 
+bash build-runtimes.sh
 ```
-Artifacts will be placed in **runtime-library/artifacts/**.
-Similarly for the conversion toolchain:
 
-```conversiontool
+Artifacts will be placed in `runtime-library/artifacts/X86_64/`.
+
+Similarly for the conversion toolchain (Docker):
+
+```bash
 cd conversion-toolchain
-./build-toolchain.sh
+IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
 ```
 
 ### 5. IDE / Editor recommendation
@@ -97,8 +99,9 @@ cd conversion-toolchain
 ### 6. Troubleshooting & common issues
 
 - If Docker build fails, verify you have sufficient permissions and available disk space.
-- If CMake cannot locate dependencies, check environment variables (e.g., **ONNX_RUNTIME_ROOT**).
-- Clean old build artifacts when switching branches: ```git clean -fdx```.
+- If CMake cannot locate OpenVINO, set the `OPENVINO_DIR` environment variable to the
+  OpenVINO Python package path (e.g., `/usr/local/lib/python3.10/dist-packages/openvino`).
+- Clean old build artifacts when switching branches: `git clean -fdx`.
 
 ## Code Style & Standards
 
@@ -139,9 +142,12 @@ intel-acceleration/
 
 ### Key modules
 
-- **Toolchain:** Takes an ONNX model and produces a format optimized for Intel-based XPU using the OpenVINO Execution Provider.
-- **Runtime:** A shared library that loads the optimized model and executes inference using the XPU.
-- **Artifacts:** The build outputs (Docker images + shared libraries) for deployment.
+- **Toolchain:** Takes an ONNX model (or zip bundle) and converts it to OpenVINO IR
+  (`.xml` + `.bin`) with optional FP16 compression or INT8 quantization via NNCF.
+- **Runtime:** A C++ shared library that loads OpenVINO IR and executes inference on
+  Intel CPU, GPU, or NPU using the OpenVINO native C++ API.
+- **Artifacts:** Build outputs — Docker image (toolchain) and `libRuntimeLibrary.so`
+  with headers (runtime) — for deployment.
 
 ### Data flow
 
@@ -152,18 +158,53 @@ intel-acceleration/
 
 This architecture allows plug-ins for different accelerators while keeping the high-level API stable.
 
+## Testing Changes Locally
+
+Tests run in two stages. Run Stage 1 first to compile models; Stage 2 benchmarks them.
+
+```bash
+# One-time Python setup
+uv venv && source .venv/bin/activate
+uv sync --extra integration --extra quantization
+
+# Stage 1: convert models + run Python tests
+bash scripts/stage1_compile.sh
+
+# Stage 2: benchmark compiled models with benchmark_app + yolo_test
+bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
+
+# Individual pytest suites
+pytest tests/test_conversion.py -v
+pytest tests/test_yolo_integration.py -v
+pytest tests/test_quantization_accuracy.py -v
+
+# C++ runtime smoke tests (after building)
+cd runtime-library/build
+./simple_test
+./yolo_test /path/to/model.xml [device] [--runs 300] [--warmup 5] [--perf-hint throughput]
+```
+
 ## Development Dependencies
 
-Please maintain a **requirements-dev.txt** (or equivalent) for any developer-only packages. Example entries:
+Python dependencies are managed with [uv](https://github.com/astral-sh/uv) via
+`pyproject.toml`. To set up the test environment:
 
-```
-pre-commit>=2.20
-clang-format>=12
-cppcheck>=2.3
-pytest>=7.0        # if Python tests exist
+```bash
+uv venv && source .venv/bin/activate
+uv sync --extra integration --extra quantization
 ```
 
-If you add new dev dependencies, update this file and notify in your PR.
+The optional extras are:
+- `integration` — adds `ultralytics` for YOLO integration tests
+- `quantization` — adds `nncf` for INT8 accuracy tests
+
+C++ tooling requirements:
+- `clang-format` (version 12+) — enforced by the `.clang-format` config at the repo root
+- `cmake` (>= 3.15)
+- `g++` 9+ or `clang` 10+ with C++17 support
+
+If you add new dependencies, update `pyproject.toml` (Python) or the relevant
+`CMakeLists.txt` (C++) and note it in your PR description.
 
 ## First Contribution Guide
 
