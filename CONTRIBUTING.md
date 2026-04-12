@@ -190,10 +190,10 @@ uv venv && source .venv/bin/activate
 uv sync --extra integration --extra quantization
 
 # Stage 1: convert models + run Python tests
-bash scripts/stage1_compile.sh
+python tests/stage1.py
 
 # Stage 2: benchmark compiled models with benchmark_app + yolo_test
-bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
+python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
 # Individual pytest suites
 pytest tests/test_conversion.py -v

@@ -1,8 +1,7 @@
 # intel-acceleration
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Build runtime](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build-runtime.yml/badge.svg)](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build-runtime.yml)
-[![Build toolchain](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build-toolchain.yml/badge.svg)](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build-toolchain.yml)
+[![Build](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build.yml/badge.svg)](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build.yml)
 
 This folder contains the source code of the shared library and the Docker image that can be used by AI application developers to benefit from the acceleration offered by Intel CPU, GPU and NPU on x86_64 machines.
 
@@ -13,7 +12,7 @@ This folder contains the source code of the shared library and the Docker image 
 - [conversion-toolchain/](conversion-toolchain): OAAX conversion toolchain — converts ONNX models to OpenVINO IR (FP32/FP16/INT8).
 - [runtime-library/](runtime-library): OAAX runtime library — C++ shared library for OpenVINO inference on Intel CPU/GPU/NPU.
 - [tests/](tests): Conversion unit tests, YOLO integration tests, Docker tests, and C++ runtime tests.
-- [scripts/](scripts): Two-stage test runner (`stage1_compile.sh`, `stage2_run.sh`).
+- [scripts/](scripts): CI setup helpers (`setup-env.sh`, `check-secrets.sh`).
 
 ## Building
 
@@ -45,7 +44,7 @@ uv sync --extra integration --extra quantization
 Converts YOLOv8n and YOLOv11n to FP32/FP16/INT8 OpenVINO IR (cached in `tests/compiled_models/`), then runs all conversion and IR validation tests.
 
 ```bash
-bash scripts/stage1_compile.sh
+python tests/stage1.py
 ```
 
 ### Stage 2 — Benchmark + runtime validation
@@ -53,7 +52,7 @@ bash scripts/stage1_compile.sh
 Uses compiled models from Stage 1. Builds the C++ runtime automatically if needed.
 
 ```bash
-bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
+python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 ```
 
 - **Step 1:** Runs `benchmark_app` (throughput hint, p95) across all models × precision variants × devices.

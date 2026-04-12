@@ -295,4 +295,4 @@ See repository license.
 
 ## Next Steps
 
-See `.claude/PLAN.md` for the current roadmap.
+See `.claude/STATUS.md` for the current roadmap.

@@ -5,7 +5,7 @@ Uses the compiled_yolo_models session fixture (conftest.py) which converts
 all variants (FP32/FP16/INT8) once and caches them to tests/compiled_models/.
 
 Run via Stage 1:
-    bash scripts/stage1_compile.sh
+    python tests/stage1.py
 Or directly:
     pytest tests/test_yolo_integration.py -v
 """

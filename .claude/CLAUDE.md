@@ -50,8 +50,8 @@ pytest tests/test_docker.py -v           # image must be built
 pytest tests/test_yolo_integration.py -v
 
 # Two-stage E2E
-bash scripts/stage1_compile.sh
-bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
+python tests/stage1.py
+python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
 # C++ runtime tests (after building runtime)
 cd runtime-library/build && ./simple_test
@@ -132,6 +132,5 @@ CMake requires `-DPLATFORM=X86_64 -DRUNTIME_VERSION=<ver> -DOPENVINO_DIR=<path>`
 
 ## Reference Files
 
-- `.claude/PLAN.md` — current status, phase goals, decision log
+- `.claude/STATUS.md` — current status, phase goals, decision log
 - `.claude/SKILLS.md` — implementation patterns and code examples
-- `.claude/FINAL_SUMMARY.md` — phase completion summary

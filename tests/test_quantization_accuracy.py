@@ -63,7 +63,7 @@ def load_compiled(xml_path: Path) -> ov.CompiledModel:
 @pytest.fixture(scope="module")
 def images():
     if not CALIB_IMAGES.exists():
-        pytest.skip("Calibration images not found — run stage1_compile.sh first")
+        pytest.skip("Calibration images not found — run tests/stage1.py first")
     paths = sorted(CALIB_IMAGES.glob("*.jpg"))[:128]
     if not paths:
         pytest.skip("No .jpg images in calibration directory")

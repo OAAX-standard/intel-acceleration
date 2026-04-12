@@ -22,7 +22,7 @@ Closes #
 - [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [ ] My branch is rebased on the latest `main`
 - [ ] The build passes locally (`bash runtime-library/build-runtimes.sh` / Docker toolchain build)
-- [ ] Relevant tests pass (`bash scripts/stage1_compile.sh` and/or `pytest tests/ -v`)
+- [ ] Relevant tests pass (`python tests/stage1.py` and/or `pytest tests/ -v`)
 - [ ] I have added or updated tests for any new behaviour
 - [ ] I have updated `CHANGELOG.md` under the appropriate version section
 - [ ] I have updated documentation (README, API headers, CLAUDE.md) if needed

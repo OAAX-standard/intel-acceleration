@@ -41,7 +41,7 @@ OpenVINO ships only versioned files (`libopenvino.so.2450`, `libtbb.so.12`).
 The cross-linker needs unversioned names (`libopenvino.so`).
 
 When using the archive, set `OPENVINO_LINK_DIR` to a directory of unversioned symlinks.
-`stage2_run.sh` creates symlinks automatically in `build/openvino_links/` and passes
+`tests/stage2.py` creates symlinks automatically in `build/openvino_links/` and passes
 `-DOPENVINO_LINK_DIR=<path>` to cmake. Don't skip this step.
 
 ## benchmark_app: use latency hint for per-request latency

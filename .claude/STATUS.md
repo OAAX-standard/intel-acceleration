@@ -1,4 +1,4 @@
-# Intel Acceleration Project Plan
+# Intel Acceleration Project Status
 
 **Project:** OAAX Implementation for Intel Hardware
 **Version:** 1.1.1
@@ -131,7 +131,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ Linux artifact: libRuntimeLibrary.so + all OpenVINO .so + TBB, all patched to $ORIGIN RPATH
 - ✅ Windows artifact: RuntimeLibrary.dll + openvino.dll + device plugins + TBB DLLs (~60 MB)
 - ✅ Upgraded to OpenVINO 2026.1.0 + NNCF 2.19.0
-- ✅ Two-stage test framework (stage1_compile.sh + stage2_run.sh)
+- ✅ Two-stage test framework (tests/stage1.py + tests/stage2.py)
 - ✅ GPU/NPU validation on real hardware (Intel UHD 770 + NVIDIA RTX A4000)
 - ✅ Benchmark suite: benchmark_app with FP32/FP16/INT8 × all devices
 - ✅ CSV output for cross-run benchmark comparison
@@ -433,7 +433,7 @@ OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8. 
 - **Rationale:** pip package puts .so files in `dist-packages/openvino/libs/` with versioned filenames and missing unversioned symlinks needed by the cross-linker; the archive provides the standard `runtime/lib/intel64/` layout and includes bundled TBB
 - **Archive layout (Linux):** `runtime/lib/intel64/*.so*`, `runtime/3rdparty/tbb/lib/*.so*`
 - **Archive layout (Windows):** `runtime/lib/intel64/Release/*.lib`, `runtime/bin/intel64/Release/*.dll`, `runtime/3rdparty/tbb/bin/*.dll`
-- **Status:** Implemented in CI (`build-runtime.yml`), version pinned to OpenVINO 2026.1.0
+- **Status:** Implemented in CI (`build.yml`), version pinned to OpenVINO 2026.1.0
 
 **2026-04-11: CMake if(WIN32) before project(), if(MSVC) after**
 - **Decision:** Use `if(WIN32)` for path configuration before `project()`, `if(MSVC)` only for post-`project()` checks

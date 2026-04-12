@@ -23,11 +23,11 @@ Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: pure-openvino
 
 ## Two-stage test workflow
 
-**Stage 1** (`bash scripts/stage1_compile.sh`):
+**Stage 1** (`python tests/stage1.py`):
 - Converts YOLO models (yolov8n, yolo11n) to FP32/FP16/INT8 IR → `tests/compiled_models/` (cached)
 - Runs `tests/test_conversion.py` + `tests/test_yolo_integration.py`
 
-**Stage 2** (`bash scripts/stage2_run.sh [--devices CPU,GPU.0] [--csv results.csv]`):
+**Stage 2** (`python tests/stage2.py [--devices CPU,GPU.0] [--csv results.csv]`):
 - Step 1: `benchmark_app -hint throughput -latency_percentile 95` on all variants × devices
 - Step 2: C++ `yolo_test` binary on all variants (FP32/FP16/INT8) × devices
 - `--csv` appends rows: `timestamp,tool,model,variant,device,avg_ms,min_ms,p95_ms,throughput_fps`
