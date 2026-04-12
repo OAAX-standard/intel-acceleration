@@ -1,298 +1,170 @@
-# OAAX OpenVINO Runtime Library
+# OAAX Runtime Library (OpenVINO)
 
-This OpenVINO implementation of an OAAX runtime uses the **OpenVINO native C++ API** for optimized AI inference on Intel hardware.
-
-## What Changed in Phase 2
-
-**Previous:** ONNX Runtime with OpenVINO execution provider
-**Now:** OpenVINO native C++ API (direct integration)
-
-### Benefits
-- ✅ **Faster Inference** - Direct OpenVINO API calls without ONNX Runtime overhead
-- ✅ **Smaller Binary** - No ONNX Runtime dependencies (50+ fewer libraries)
-- ✅ **Native IR Support** - Loads OpenVINO IR (.xml + .bin) models directly
-- ✅ **Better Integration** - Full access to OpenVINO features and optimizations
+C++ shared library implementing the OAAX inference interface on Intel hardware using the OpenVINO native C++ API. Supports CPU, GPU, and NPU on x86_64 Linux and Windows.
 
 ## Prerequisites
 
-### System Requirements
-- **OpenVINO Toolkit** 2026.1.0 or later
-- **GCC 9.5+** (for cross-compilation)
+- **OpenVINO 2026.1.0** archive from [storage.openvinotoolkit.org](https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/)
+- **GCC 9.5+** and cross-compilation toolchain at `/opt/x86_64-unknown-linux-gnu-gcc-9.5.0` (Linux)
 - **CMake 3.10.2+**
 
-### Install OpenVINO
+The CI setup script installs all build dependencies:
 
-**Option 1: Via pip (recommended)**
 ```bash
-pip install openvino openvino-dev
+sudo bash scripts/setup-env.sh   # from the repo root
 ```
 
-**Option 2: Download from Intel**
-```bash
-# Download from https://www.intel.com/openvino
-# Extract and source the environment:
-source /opt/intel/openvino/setupvars.sh
-```
-
-## Getting Started
-
-### 1. Build the Runtime
+## Build
 
 ```bash
 cd runtime-library
-bash build-runtimes.sh
+OPENVINO_DIR=/opt/intel/openvino/runtime bash build-runtimes.sh
 ```
 
-This will:
-- Detect your OpenVINO installation
-- Compile the runtime library with OpenVINO native API
-- Create `libRuntimeLibrary.so` in `artifacts/X86_64/`
-- Copy all required OpenVINO shared libraries
+Output in `runtime-library/artifacts/X86_64/`:
 
-### 2. Verify the Build
-
-```bash
-ls artifacts/X86_64/
-# Should show:
-# - libRuntimeLibrary.so (your runtime)
-# - libopenvino.so.2450
-# - libopenvino_intel_cpu_plugin.so
-# - libtbb.so.12
-# ... and other OpenVINO libraries
+```
+libRuntimeLibrary.so       your runtime
+libopenvino.so.2610        OpenVINO core
+libopenvino_intel_cpu_plugin.so
+libopenvino_intel_gpu_plugin.so
+libopenvino_intel_npu_plugin.so
+libtbb.so.12               Intel TBB
+...
 ```
 
-### 3. Use the Runtime
+All `.so` files have `$ORIGIN` RPATH set so they find each other when deployed together.
 
-The runtime expects **OpenVINO IR format** models (`.xml` + `.bin`), which you can generate using the conversion toolchain from Phase 1.
+### Windows
+
+```bat
+cd runtime-library
+build-runtime.bat
+```
+
+Output in `runtime-library/artifacts/Windows/`:  `RuntimeLibrary.dll` + OpenVINO + TBB DLLs.
+
+## API usage
+
+Include `runtime_core.hpp` and link against `RuntimeLibrary`.
 
 ```c
 #include "runtime_core.hpp"
 
-// Initialize runtime
-runtime_initialization();
+// 1. Initialize (device and performance hint are optional)
+char *keys[]   = {"device_type", "perf_hint"};
+void *values[] = {"CPU", "throughput"};
+runtime_initialization_with_args(2, keys, values);
 
-// Load OpenVINO IR model
+// 2. Load model (.xml file — .bin must be in the same directory)
 runtime_model_loading("/path/to/model.xml");
 
-// Send input tensors
+// 3. Send input (runtime takes ownership; do not free after this call)
 send_input(input_tensors);
 
-// Receive output tensors
-receive_output(&output_tensors);
+// 4. Poll for result
+tensors_struct *output = NULL;
+while (receive_output(&output) != 0) {}   // non-blocking; retry until ready
 
-// Cleanup
+// 5. Use output, then return buffer to pool
+runtime_return_output(output);            // preferred over deep_free_tensors_struct
+
+// 6. Tear down
 runtime_destruction();
 ```
 
-## Architecture Changes
+> **Important:** Use `runtime_return_output()` to release output buffers, not
+> `deep_free_tensors_struct()`. The runtime pre-allocates an output buffer pool for
+> zero-copy inference; `runtime_return_output()` recycles the buffer back into the pool.
+> `deep_free_tensors_struct()` frees the memory outright and should only be used if
+> you received the output after calling `runtime_destruction()`.
 
-### Before (Phase 1)
-```
-Application → OAAX Runtime → ONNX Runtime → OpenVINO EP → OpenVINO
-```
+## Configuration
 
-### After (Phase 2)
-```
-Application → OAAX Runtime → OpenVINO Native API
-```
+All parameters are passed as strings to `runtime_initialization_with_args`.
 
-## Model Format
+| Key | Default | Values | Description |
+|-----|---------|--------|-------------|
+| `device_type` | `"CPU"` | `"CPU"` `"GPU"` `"NPU"` | Target inference device |
+| `perf_hint` | `"latency"` | `"latency"` `"throughput"` `"cumulative_throughput"` | OpenVINO performance mode |
+| `log_level` | `"2"` (info) | `"0"`–`"6"` | spdlog level: 0=trace, 2=info, 4=warn, 6=off |
+| `log_file` | `"runtime.log"` | any path | Log output file |
 
-**Input:** OpenVINO IR format (`.xml` + `.bin`)
-**Generated by:** Phase 1 conversion toolchain
+If `device_type` compilation fails (e.g. no GPU present), the runtime automatically falls
+back to CPU and logs a warning.
 
-Example:
-```bash
-# Phase 1: Convert ONNX to OpenVINO IR
-docker run --rm -v $(pwd):/data \
-  oaax-intel-toolchain /data/model.zip /data/output
+## Working with tensors
 
-# Phase 2: Load the IR model in runtime
-runtime_model_loading("/data/output/model.xml");
-```
+`tensors_struct` is defined in `include/tensors_struct.h`. Use the provided helpers:
 
-## Configuration Options
-
-The runtime supports the following initialization parameters:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `log_level` | int | `info` | Logging verbosity (trace, debug, info, warn, error) |
-| `log_file` | string | `runtime.log` | Log file path |
-| `device_type` | string | `CPU` | Target device (CPU, GPU, NPU) |
-| `perf_hint` | string | `latency` | Performance mode (`latency`, `throughput`, `cumulative_throughput`) |
-
-Example usage:
 ```c
-char* keys[] = {"device_type", "log_level"};
-void* values[] = {"CPU", "2"}; // 2 = debug level
-runtime_initialization_with_args(2, keys, values);
+// Allocate
+tensors_struct *ts = allocate_tensors_struct(1);
+ts->names[0]      = strdup("images");
+ts->ranks[0]      = 4;
+ts->shapes[0]     = malloc(4 * sizeof(size_t));
+ts->shapes[0][0]  = 1; ts->shapes[0][1] = 3;
+ts->shapes[0][2]  = 640; ts->shapes[0][3] = 640;
+ts->data_types[0] = DATA_TYPE_FLOAT;
+ts->data[0]       = malloc(1 * 3 * 640 * 640 * sizeof(float));
+
+// Free (only when NOT using runtime_return_output)
+deep_free_tensors_struct(ts);
 ```
 
-## API Reference
-
-### Core Functions
-
-**`int runtime_initialization()`**
-Initialize the OpenVINO runtime. Must be called first.
-
-**`int runtime_initialization_with_args(int length, char** keys, void** values)`**
-Initialize with custom configuration parameters.
-
-**`int runtime_model_loading(const char* model_path)`**
-Load an OpenVINO IR model (.xml file path).
-
-**`int send_input(tensors_struct* input_tensors)`**
-Queue input tensors for inference.
-
-**`int receive_output(tensors_struct** output_tensors)`**
-Retrieve output tensors from inference.
-
-**`int runtime_destruction()`**
-Cleanup and destroy the runtime.
-
-**`const char* runtime_version()`**
-Get the runtime version string.
-
-**`const char* runtime_name()`**
-Get the runtime name ("OAAX Intel Runtime (OpenVINO Native)").
-
-## Advanced Build Options
-
-### Custom OpenVINO Location
-```bash
-OPENVINO_DIR=/opt/intel/openvino bash build-runtimes.sh
-```
-
-### Cross-Compilation
-The default build is for X86_64. For other platforms:
-```bash
-cmake .. \
-  -DPLATFORM=WINDOWS \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DRUNTIME_VERSION="1.0.0" \
-  -DOPENVINO_DIR="/path/to/openvino"
-```
-
-### Debug Build
-```bash
-cd build
-cmake .. \
-  -DPLATFORM=X86_64 \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DRUNTIME_VERSION="1.0.0"
-make -j$(nproc)
-```
+Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_FLOAT16`, `DATA_TYPE_INT8`,
+`DATA_TYPE_UINT8`, `DATA_TYPE_INT32`, `DATA_TYPE_INT64`, and others — see `tensors_struct.h`.
 
 ## Troubleshooting
 
-### OpenVINO Not Found
+**OpenVINO not found at configure time**
 ```
-Error: OpenVINO not found at /opt/intel/openvino/runtime
+CMake Error: OpenVINO not found at /opt/intel/openvino/runtime
 ```
-**Solution:** Set `OPENVINO_DIR` environment variable:
+Set `OPENVINO_DIR` to the `runtime/` subdirectory of your OpenVINO archive:
 ```bash
-export OPENVINO_DIR=/opt/intel/openvino
+OPENVINO_DIR=/path/to/openvino_toolkit_.../runtime bash build-runtimes.sh
 ```
 
-### Missing Shared Libraries
+**Missing shared libraries at runtime**
 ```
-error while loading shared libraries: libopenvino.so.2450: cannot open shared object file
+error while loading shared libraries: libopenvino.so.2610: cannot open shared object file
 ```
-**Solution:** Add OpenVINO libs to `LD_LIBRARY_PATH`:
+All required `.so` files are in the `artifacts/X86_64/` directory. Deploy them alongside
+`libRuntimeLibrary.so` and set `LD_LIBRARY_PATH` if not using RPATH:
 ```bash
-export LD_LIBRARY_PATH=/path/to/openvino/libs:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/path/to/artifacts/X86_64:$LD_LIBRARY_PATH
 ```
 
-### Model Loading Fails
-```
-Error during model loading: Cannot read the model
-```
-**Solution:** Ensure you're loading the `.xml` file (not `.bin`) and both files exist:
+**Model loading fails**
+Ensure you pass the `.xml` path (not `.bin`) and both files are in the same directory:
 ```bash
-ls model.xml model.bin  # Both should exist
+ls model.xml model.bin   # both must exist
 ```
 
-## Performance Optimization
-
-### CPU Optimization
-```c
-char* keys[] = {"device_type", "perf_hint"};
-void* values[] = {"CPU", "throughput"};
-runtime_initialization_with_args(2, keys, values);
-```
-
-### GPU Acceleration
-```c
-char* keys[] = {"device_type"};
-void* values[] = {"GPU"};
-runtime_initialization_with_args(1, keys, values);
-```
-
-### NPU Acceleration
-```c
-char* keys[] = {"device_type"};
-void* values[] = {"NPU"};
-runtime_initialization_with_args(1, keys, values);
-```
-
-## Dependencies
-
-**Build-time:**
-- OpenVINO C++ headers
-- spdlog (included in deps/)
-- concurrentqueue (included in deps/)
-
-**Runtime:**
-- `libopenvino.so.2450` - OpenVINO core
-- `libopenvino_intel_cpu_plugin.so` - CPU plugin
-- `libtbb.so.12` - Threading Building Blocks
-- Additional plugins for GPU/NPU if used
-
-## Testing
-
-Tests live in the project root `tests/` directory.
-
-```bash
-# Build test binaries (done automatically by build-runtimes.sh)
-cd runtime-library/build && make simple_test yolo_test
-
-# Run
-./simple_test                # init/destroy smoke test
-./yolo_test <model.xml>      # full inference test with YOLO IR model
-./yolo_test <model.xml> GPU  # test on GPU
-```
-
-## Project Structure
+## Project structure
 
 ```
 runtime-library/
 ├── src/
-│   ├── runtime_core.cpp      # Main runtime implementation (OpenVINO native)
-│   └── runtime_utils.cpp     # Type mapping and utilities
+│   ├── runtime_core.cpp    # inference pipeline (OpenVINO native API)
+│   └── runtime_utils.cpp   # OAAX ↔ OpenVINO type mapping
 ├── include/
-│   ├── runtime_core.hpp      # Public API
-│   ├── runtime_utils.hpp     # Utility functions
-│   └── tensors_struct.h      # OAAX tensor structure
+│   ├── runtime_core.hpp    # public C API (OAAX interface)
+│   └── tensors_struct.h    # OAAX tensor structure and helpers
 ├── deps/
-│   ├── spdlog/               # Logging library
-│   └── concurrentqueue/      # Lock-free queue
-├── CMakeLists.txt            # OpenVINO-based build configuration
-├── build-runtimes.sh         # Build automation script
-└── README.md                 # This file
+│   ├── spdlog/             # logging
+│   ├── concurrentqueue/    # lock-free queue
+│   └── tools/c-utilities/  # OAAX C utilities
+├── cmake/
+│   └── copy_windows_dlls.cmake
+├── CMakeLists.txt
+├── build-runtimes.sh       # Linux build script
+└── build-runtime.bat       # Windows build script
 ```
 
-Tests: `../tests/runtime/simple_test.cpp`, `../tests/runtime/yolo_test.cpp`
-
-## Examples
-
-For complete examples and applications using the OAAX runtime, visit:
-[https://github.com/oaax-standard/examples](https://github.com/oaax-standard/examples)
+Test sources: `../tests/runtime/simple_test.cpp`, `../tests/runtime/yolo_test.cpp`
 
 ## License
 
-See repository license.
-
-## Next Steps
-
-See `.claude/STATUS.md` for the current roadmap.
+See repository [LICENSE](../LICENSE).
