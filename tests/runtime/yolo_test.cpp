@@ -203,16 +203,16 @@ int main(int argc, char **argv) {
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false, 10).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, 5).empty(), "warmup failed");
     }
     std::cout << "  ✓ Done" << std::endl;
 
     // ── 4. Benchmark ──────────────────────────────────────────────────────────
-    std::cout << "[4] Benchmarking (" << runs << " runs, in-flight=10)..." << std::endl;
+    std::cout << "[4] Benchmarking (" << runs << " runs, in-flight=5)..." << std::endl;
     std::vector<Clock::time_point> send_times(runs);
 
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true, 10);
+    auto latencies = run_batch(runs, send_times, true, 5);
     double bench_ms = Ms(Clock::now() - bench_start).count();
 
     CHECK(!latencies.empty(), "benchmark failed");

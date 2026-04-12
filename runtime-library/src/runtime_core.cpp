@@ -34,6 +34,7 @@ static inline int sem_destroy(sem_t *s) { return CloseHandle(s->h) ? 0 : -1; }
 
 #include "concurrentqueue.h"
 #include "runtime_core.hpp"
+#include "runtime_profiler.hpp"
 #include "runtime_utils.hpp"
 #include "tensors_struct.h"
 
@@ -91,6 +92,10 @@ struct SlotState {
   tensors_struct *input{nullptr};
   tensors_struct *output{nullptr};
   bool from_pool{false};
+#ifdef OAAX_PROFILE
+  int64_t start_async_ns{0};  // timestamp just before start_async(); used to
+                              // measure inference time
+#endif
 };
 static std::vector<SlotState> slot_states;
 
@@ -114,6 +119,14 @@ static string perf_hint = "latency";
 
 // Last error message returned by runtime_error_message().
 static string last_error;
+
+#ifdef OAAX_PROFILE
+static OaaxProfiler g_profiler;
+// Parallel queue of enqueue timestamps — one entry per output_tensors_queue
+// push. Used by receive_output() to measure how long results sit in the output
+// queue.
+static moodycamel::ConcurrentQueue<int64_t> output_enqueue_times;
+#endif
 
 extern "C" int runtime_initialization_with_args(int length, char **keys,
                                                 void **values) {
@@ -232,6 +245,16 @@ extern "C" int runtime_model_loading(const char *model_path) {
     // Stop any existing manager and wait for all in-flight completions.
     stop_and_join_manager();
     drain_output_pool();
+
+    // Reset profiling counters now that all old-model callbacks have completed.
+#ifdef OAAX_PROFILE
+    g_profiler.reset();
+    {
+      int64_t ts;
+      while (output_enqueue_times.try_dequeue(ts)) {
+      }
+    }
+#endif
 
     // Reset all per-session state.
     {
@@ -352,6 +375,12 @@ extern "C" int send_input(tensors_struct *input_tensors) {
 static void on_inference_complete(int idx, std::exception_ptr ex) {
   SlotState &s = slot_states[idx];
 
+#ifdef OAAX_PROFILE
+  g_profiler.inference_ns.fetch_add(
+      static_cast<uint64_t>(prof_now_ns() - s.start_async_ns),
+      std::memory_order_relaxed);
+#endif
+
   if (ex) {
     try {
       std::rethrow_exception(ex);
@@ -388,7 +417,16 @@ static void on_inference_complete(int idx, std::exception_ptr ex) {
 
   deep_free_tensors_struct(s.input);
 
+  // Push timestamp BEFORE result so receive_output() always finds it available.
+#ifdef OAAX_PROFILE
+  output_enqueue_times.enqueue(prof_now_ns());
+#endif
   if (!output_tensors_queue.try_enqueue(result)) {
+#ifdef OAAX_PROFILE
+    // Pair of failed enqueue: discard the orphaned timestamp.
+    int64_t discard;
+    output_enqueue_times.try_dequeue(discard);
+#endif
     logger->error("[slot {}] Failed to enqueue output.", idx);
     runtime_return_output(result);
   } else {
@@ -405,14 +443,18 @@ static void on_inference_complete(int idx, std::exception_ptr ex) {
 static void manager_thread_func() {
   while (true) {
     // Wait for a queued input.
+    PROF_TS(t_input);
     while (sem_wait(&input_sem) == -1 && errno == EINTR) continue;
+    PROF_ADD(input_wait_ns, t_input);
     if (stop_manager) return;
 
     tensors_struct *input = nullptr;
     input_tensors_queue.try_dequeue(input);  // guaranteed to succeed
 
     // Wait for a free InferRequest slot.
+    PROF_TS(t_slot);
     while (sem_wait(&slot_sem) == -1 && errno == EINTR) continue;
+    PROF_ADD(slot_wait_ns, t_slot);
     if (stop_manager) {
       deep_free_tensors_struct(input);
       return;
@@ -424,12 +466,12 @@ static void manager_thread_func() {
 
     ov::InferRequest &req = infer_requests[idx];
 
-    // For static shapes: redirect the request's output to the pool buffer
-    // so OpenVINO writes inference results directly into the consumer buffer.
     tensors_struct *output = nullptr;
     bool from_pool = pool_active.load(std::memory_order_relaxed);
 
+    // Acquire a pool buffer (static shapes only).
     if (from_pool) {
+      PROF_TS(t_pool);
       while (!output_buffer_pool.try_dequeue(output)) {
         if (stop_manager) {
           deep_free_tensors_struct(input);
@@ -439,6 +481,14 @@ static void manager_thread_func() {
         }
         std::this_thread::sleep_for(std::chrono::microseconds(100));
       }
+      PROF_ADD(pool_wait_ns, t_pool);
+    }
+
+    // Tensor setup: redirect outputs to pool buffers (if pooled), then set
+    // inputs.
+    PROF_TS(t_setup);
+
+    if (from_pool) {
       for (size_t i = 0; i < output_names.size(); ++i)
         req.set_output_tensor(
             i, ov::Tensor(pool_out_infos[i].ov_type, pool_out_infos[i].shape,
@@ -458,6 +508,7 @@ static void manager_thread_func() {
                                   input->data[i]));
       }
     } catch (const std::exception &e) {
+      PROF_ADD(tensor_setup_ns, t_setup);
       logger->error(
           "[manager] Failed to set tensor '{}' on slot {} (shape/type "
           "mismatch?): {}",
@@ -469,11 +520,18 @@ static void manager_thread_func() {
       continue;
     }
 
+    PROF_ADD(tensor_setup_ns, t_setup);
+
     // Write per-slot state — read by on_inference_complete when the callback
     // fires.
+#ifdef OAAX_PROFILE
+    slot_states[idx] = {input, output, from_pool, prof_now_ns()};
+#else
     slot_states[idx] = {input, output, from_pool};
+#endif
 
     req.start_async();
+    PROF_INC(dispatches);
     logger->debug("[manager] start_async fired on slot {}.", idx);
   }
 }
@@ -493,6 +551,13 @@ extern "C" int receive_output(tensors_struct **output_tensors) {
     logger->trace("No output tensors available.");
     return -1;
   }
+#ifdef OAAX_PROFILE
+  int64_t enqueue_ns;
+  if (output_enqueue_times.try_dequeue(enqueue_ns))
+    g_profiler.output_queue_ns.fetch_add(
+        static_cast<uint64_t>(prof_now_ns() - enqueue_ns),
+        std::memory_order_relaxed);
+#endif
   logger->debug("Output tensors received successfully.");
   return 0;
 }
@@ -544,6 +609,33 @@ extern "C" int runtime_destruction() {
 
   core.reset();
   logger->debug("Runtime destroyed.");
+
+#ifdef OAAX_PROFILE
+  uint64_t n = g_profiler.dispatches.load();
+  if (n > 0) {
+    auto us = [](uint64_t ns_total, uint64_t count) -> double {
+      return static_cast<double>(ns_total) / static_cast<double>(count) /
+             1000.0;
+    };
+    logger->info("=== OAAX profiling report ({} inferences) ===", n);
+    logger->info("  input_wait:   {:8.2f} us/inf",
+                 us(g_profiler.input_wait_ns, n));
+    logger->info("  slot_wait:    {:8.2f} us/inf",
+                 us(g_profiler.slot_wait_ns, n));
+    logger->info("  pool_wait:    {:8.2f} us/inf",
+                 us(g_profiler.pool_wait_ns, n));
+    logger->info("  tensor_setup: {:8.2f} us/inf",
+                 us(g_profiler.tensor_setup_ns, n));
+    logger->info("  inference:    {:8.2f} us/inf",
+                 us(g_profiler.inference_ns, n));
+    logger->info("  output_queue: {:8.2f} us/inf",
+                 us(g_profiler.output_queue_ns, n));
+    uint64_t tracked = g_profiler.input_wait_ns + g_profiler.slot_wait_ns +
+                       g_profiler.pool_wait_ns + g_profiler.tensor_setup_ns +
+                       g_profiler.inference_ns + g_profiler.output_queue_ns;
+    logger->info("  total tracked:{:8.2f} us/inf", us(tracked, n));
+  }
+#endif
 
   destroy_logger(logger);
   return 0;
