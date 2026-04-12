@@ -53,6 +53,10 @@ pytest tests/test_yolo_integration.py -v
 python tests/stage1.py
 python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
+# Batch-size throughput sweep (exports .pt → ONNX with explicit batch, converts to IR, benchmarks)
+python tests/benchmark_batch_sweep.py [--model yolov8n] [--device CPU] [--batches 1,2,4,8]
+# IR models cached in tests/compiled_models/_batch_sweep/ — re-runs skip export
+
 # C++ runtime tests (after building runtime)
 cd runtime-library/build && ./simple_test
 cd runtime-library/build && ./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
@@ -118,6 +122,12 @@ Note: iGPU outperforms the RTX A4000 here because OpenVINO's GPU plugin is optim
 
 **Output buffer pool:**
 After model loading, if all output shapes are static, the runtime pre-allocates `actual_requests × 4` `tensors_struct` objects. Workers memcpy into these — no malloc/free on the hot path. Eliminates mmap/munmap syscalls from large allocation calls, which is significant at INT8 speeds (~255 FPS).
+
+**Batch size behaviour (verified on i7-12700K):**
+- **CPU**: Batch=1 is optimal with `throughput` hint — OpenVINO already runs multiple concurrent InferRequests across all cores; batching serializes work without adding parallelism.
+- **iGPU (Intel)**: Minor throughput plateau at batch 4-8; batch=1 is still near-optimal.
+- **dGPU via OpenCL (NVIDIA)**: Degrades sharply beyond batch=2 — OpenCL kernel overhead on NVIDIA not optimized in OpenVINO. An Intel Xe dGPU would differ.
+- For batch > 1, use `tests/benchmark_batch_sweep.py` which exports from `.pt` with explicit batch dims (simple IR reshape fails on YOLO due to hardcoded DFL reshape ops).
 
 ### CMake Build
 

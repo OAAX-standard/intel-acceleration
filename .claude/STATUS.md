@@ -147,6 +147,8 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ INT8/FP16 quantization accuracy test (`test_quantization_accuracy.py`; FP16 cosine ≈1.000, INT8 cosine ≈0.9998)
 - ✅ Debug-only dispatch profiler (`runtime_profiler.hpp`): per-stage timing (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) enabled via `OAAX_PROFILE=1` (auto-set for Debug builds); zero overhead in Release
 - ✅ Multi-GPU auto-detection: when `device_type="GPU"` and multiple GPUs present, automatically constructs `MULTI:GPU.0,GPU.1,...` string; use `perf_hint=cumulative_throughput` for best aggregate FPS
+- ✅ Batch-size throughput sweep (`tests/benchmark_batch_sweep.py`): exports YOLO .pt → ONNX with explicit batch, converts to IR, benchmarks yolo_test + benchmark_app across batches 1/2/4/8; results cached in `tests/compiled_models/_batch_sweep/`
+- ✅ stage2.py regex fix: updated parse patterns to match `Avg latency:` / `Min latency:` / `p95 latency:` output labels from yolo_test
 
 **Goals:**
 1. **Comprehensive Testing**
@@ -266,7 +268,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ❌ No ARM64 support yet
 - ⚠️ GPU/NPU features implemented but not extensively tested
 - ⚠️ Dynamic shape support limited
-- ⚠️ Batch inference not optimized
+- ℹ️ Batch > 1 requires re-exporting from .pt (IR reshape fails on YOLO DFL head); see `tests/benchmark_batch_sweep.py`
 
 ### Testing
 - ⚠️ GPU/NPU tests require specific hardware
@@ -275,35 +277,48 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ---
 
-## Performance Benchmarks (Phase 3, Intel Core i7-12700K)
+## Performance Benchmarks (Phase 3, Intel Core i7-12700K + UHD 770 iGPU + RTX A4000 dGPU)
 
-### CPU — `benchmark_app` vs `yolo_test` (throughput hint, 50 runs)
+Throughput hint, batch=1, 100 runs / 15 s per config. Both tools agree within measurement noise on CPU; GPU gap is H2D/D2H transfer overhead.
 
-| Tool | Model | Precision | Throughput |
-|------|-------|-----------|------------|
-| benchmark_app | yolo11n | FP32 | ~95.6 FPS |
-| benchmark_app | yolo11n | FP16 | ~98.6 FPS |
-| benchmark_app | yolo11n | INT8 | **~244 FPS** |
-| yolo_test (OAAX) | yolo11n | FP32 | ~97.7 FPS |
-| yolo_test (OAAX) | yolo11n | FP16 | ~98.1 FPS |
-| yolo_test (OAAX) | yolo11n | INT8 | ~237 FPS |
-| benchmark_app | yolov8n | FP32 | ~84 FPS |
-| yolo_test (OAAX) | yolov8n | FP32 | ~84.8 FPS |
+### benchmark_app (GPU tensors stay on device — no transfer overhead)
 
-OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8.
+| Model | Prec | CPU | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU ("auto") |
+|-------|------|-----|--------------|--------------|--------------|
+| yolov8n | FP32 | ~85 FPS | ~79 FPS | ~56 FPS | ~79 FPS |
+| yolov8n | INT8 | ~240 FPS | ~116 FPS | ~67 FPS | ~116 FPS |
+| yolo11n | FP32 | ~98 FPS | ~82 FPS | ~70 FPS | ~82 FPS |
+| yolo11n | INT8 | ~243 FPS | ~113 FPS | ~84 FPS | ~113 FPS |
 
-### GPU — `benchmark_app` vs `yolo_test` (YOLOv8n FP32, latency hint, 50 runs)
+Note: `benchmark_app -d GPU` does NOT use MULTI — routes to fastest single GPU only.
 
-| Tool | Device | Throughput | Notes |
-|------|--------|------------|-------|
-| benchmark_app | GPU (iGPU) | ~72.8 FPS | No H2D/D2H — tensors stay on GPU |
-| yolo_test (OAAX) | GPU.0 (iGPU) | ~68 FPS | ~7% gap from per-inference H2D+D2H transfers |
-| yolo_test (OAAX) | GPU.1 (dGPU RTX A4000) | ~52 FPS | OpenCL path on NVIDIA; TensorRT would be faster |
-| yolo_test (OAAX) | GPU MULTI, latency | ~68 FPS | Routes to fastest device (iGPU wins) |
-| yolo_test (OAAX) | GPU MULTI, cumulative_throughput | **~114 FPS** | Both GPUs active; ~95% of theoretical sum |
-| yolo_test (OAAX) | GPU MULTI, throughput | ~112 FPS | Effectively same as cumulative_throughput |
+### yolo_test / OAAX runtime (GPU = our MULTI auto-detection active)
 
-**GPU gap explanation:** `benchmark_app` keeps tensors in GPU memory (no transfers). The OAAX runtime uses caller-provided CPU buffers, requiring H2D (input) and D2H (output) on every inference — adds ~1 ms on iGPU (cache coherency overhead on shared memory), ~0.4 ms PCIe latency on dGPU.
+| Model | Prec | CPU | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU (MULTI) |
+|-------|------|-----|--------------|--------------|-------------|
+| yolov8n | FP32 | ~84 FPS | ~72 FPS | ~55 FPS | **~117 FPS** |
+| yolov8n | INT8 | ~226 FPS | ~101 FPS | ~60 FPS | **~152 FPS** |
+| yolo11n | FP32 | ~97 FPS | ~75 FPS | ~67 FPS | **~130 FPS** |
+| yolo11n | INT8 | ~235 FPS | ~103 FPS | ~71 FPS | **~156 FPS** |
+
+**Key findings:**
+- MULTI delivers ~1.6× throughput vs single iGPU; `benchmark_app -d GPU` doesn't activate MULTI
+- CPU INT8 (~226-235 FPS) beats MULTI GPU INT8 (~152 FPS) — CPU INT8 is the optimal target on this machine
+- H2D/D2H gap: ~9-13% on iGPU, negligible on dGPU (OpenCL overhead dominates)
+
+### Batch-size sweep — yolov8n FP32, throughput hint (`tests/benchmark_batch_sweep.py`)
+
+| Batch | CPU FPS | iGPU FPS | dGPU (OpenCL) FPS |
+|-------|---------|----------|-------------------|
+| 1 | **84** | **77** | **60** |
+| 2 | 76 | 68 | 58 |
+| 4 | 70 | 71 | 39 |
+| 8 | 66 | 71 | 28 |
+
+**Batch findings:**
+- **CPU**: Batch=1 is optimal — `throughput` hint parallelizes across cores via concurrent InferRequests; batching just serializes more work per slot
+- **iGPU**: Plateaus at batch 4-8 (~71 FPS) — slight saturation benefit over batch=1
+- **dGPU (RTX A4000/OpenCL)**: Degrades sharply beyond batch=2 — OpenCL kernel launch overhead on NVIDIA is not optimized in OpenVINO. An Intel Xe dGPU would show improvement with larger batches.
 
 ---
 
