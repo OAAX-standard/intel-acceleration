@@ -65,13 +65,35 @@ Our runtime uses caller-provided CPU buffers, adding per-inference transfers:
 - iGPU (shared memory): ~1 ms overhead (cache coherency) → ~7% gap
 - dGPU (PCIe): ~0.4 ms overhead, but inference is ~37 ms → gap lost in noise
 
-## Benchmark results (CPU, throughput hint, yolo_test)
+## Comprehensive benchmark results (i7-12700K, UHD 770 iGPU + RTX A4000 dGPU)
 
-| Model | Precision | yolo_test FPS | benchmark_app FPS | Gap |
-|-------|-----------|---------------|-------------------|-----|
-| yolov8n | FP32 | ~84.8 | ~84 | <1% |
-| yolo11n | FP32 | ~97.7 | ~95.6 | <1% |
-| yolo11n | INT8 | ~237 | ~244 | ~3% |
+Throughput hint, batch=1, 100 runs / 15s per config.
+
+### benchmark_app (no H2D/D2H — GPU tensors stay on device)
+
+| Model | Prec | CPU | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU ("auto") |
+|-------|------|-----|--------------|--------------|--------------|
+| yolov8n | FP32 | ~85 FPS | ~79 FPS | ~56 FPS | ~79 FPS |
+| yolov8n | INT8 | ~240 FPS | ~116 FPS | ~67 FPS | ~116 FPS |
+| yolo11n | FP32 | ~98 FPS | ~82 FPS | ~70 FPS | ~82 FPS |
+| yolo11n | INT8 | ~243 FPS | ~113 FPS | ~84 FPS | ~113 FPS |
+
+Note: `benchmark_app -d GPU` does NOT use MULTI — it routes to fastest single GPU.
+
+### yolo_test (with H2D/D2H per inference; GPU = our MULTI auto-detection)
+
+| Model | Prec | CPU | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU (MULTI) |
+|-------|------|-----|--------------|--------------|-------------|
+| yolov8n | FP32 | ~84 FPS | ~72 FPS | ~55 FPS | ~117 FPS |
+| yolov8n | INT8 | ~226 FPS | ~101 FPS | ~60 FPS | ~152 FPS |
+| yolo11n | FP32 | ~97 FPS | ~75 FPS | ~67 FPS | ~130 FPS |
+| yolo11n | INT8 | ~235 FPS | ~103 FPS | ~71 FPS | ~156 FPS |
+
+### Key findings
+- **MULTI GPU delivers 1.6× throughput** vs single iGPU; benchmark_app "GPU" doesn't use MULTI
+- **CPU INT8 beats MULTI GPU INT8** on this machine (~226 vs ~152 FPS) — optimal target is CPU
+- **H2D/D2H gap** on single iGPU: ~9-13% (higher at INT8 speeds); dGPU gap is lost in noise
+- **stage2.py regex bug** fixed (commit af3d9279): `Avg latency:` pattern updated
 
 ## Debug profiler
 
