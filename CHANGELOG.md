@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.0] - 2026-04-12
+
+### CI / Testing
+
+- **Platform-independent test scripts:** replaced `scripts/stage1_compile.sh` and
+  `scripts/stage2_run.sh` (bash/PowerShell) with `tests/stage1.py` and
+  `tests/stage2.py` — single Python implementation runs on Linux and Windows.
+- **Windows integration tests:** added `integration-tests-windows` CI job that
+  downloads compiled models from the Linux job artifact and runs `stage2.py`.
+- **Docker-based model compilation:** `tests/conftest.py` now compiles YOLO models
+  (FP32/FP16/INT8) via the toolchain Docker image instead of calling the Python
+  package directly, ensuring test parity with production conversion.
+- **Public artifact downloads:** CI `integration-tests` jobs now download the
+  runtime library and toolchain image via `wget`/`Invoke-WebRequest` from the
+  public object storage URL instead of using `s3cmd`/`s5cmd` with credentials.
+- **Unified build workflow:** merged `build-toolchain.yml` and `build-runtime.yml`
+  into a single `build.yml`; removed the now-redundant `build-toolchain.yml`.
+
+### Conversion Toolchain
+
+- **Fixed NNCF missing from Docker image:** the `Dockerfile` was installing only
+  base dependencies (`-e .`); changed to `.[quantization]` so NNCF is included.
+  Previously, INT8 conversions silently fell back to FP32-sized output with
+  "NNCF not available, skipping quantization".
+
+---
+
 ## [1.1.1] - 2026-04-11
 
 ### Runtime — Performance Optimizations

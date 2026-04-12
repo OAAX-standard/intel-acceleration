@@ -3,7 +3,7 @@ name: intel-acceleration project state
 description: Current architecture, test framework, artifact packaging, and benchmark results for the OAAX Intel acceleration project
 type: project
 ---
-OAAX runtime + conversion toolchain for Intel hardware using OpenVINO 2026.1.0 + NNCF 2.19.0.
+OAAX runtime + conversion toolchain for Intel hardware using OpenVINO 2026.1.0 + NNCF 2.19.0. Version: 1.2.0
 Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: pure-openvino-implementation (open PR #17 — do NOT merge without Ayoub's approval)
 
 **Why:** Production OAAX implementation for Intel CPU/GPU/NPU, replaces ONNX Runtime with native OpenVINO C++ API.
