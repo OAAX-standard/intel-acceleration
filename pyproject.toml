@@ -43,6 +43,9 @@ conversion-toolchain = { path = "conversion-toolchain", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: long-running memory and stability tests (~5-10 min each). Run with: pytest -m slow",
+]
 
 # ── Ruff (lint + format) ──────────────────────────────────────────────────────
 [tool.ruff]

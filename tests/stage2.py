@@ -142,6 +142,8 @@ def run_process(cmd: list, cwd=None, env=None, timeout: int = 120) -> str | None
             env=env,
             timeout=timeout,
         )
+        if result.returncode != 0:
+            print(f"  [exit {result.returncode}] {Path(cmd[0]).name}")
         return result.stdout + result.stderr
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         print(f"  [error] {e}")
@@ -181,6 +183,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
 def run_yolo_test(xml: Path, device: str, warmup: int, runs: int) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
+        print(f"  [error] yolo_test binary not found: {binary}")
         return None
     env = os.environ.copy()
     if not IS_WINDOWS:
