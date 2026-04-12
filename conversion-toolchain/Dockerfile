@@ -42,7 +42,7 @@ COPY conversion-toolchain/pyproject.toml /app/
 COPY conversion-toolchain/conversion_toolchain /app/conversion_toolchain
 
 # Install Python dependencies
-RUN uv pip install --system -e . && \
+RUN uv pip install --system -e ".[quantization]" && \
     uv cache clean
 
 # Create standard directories for mounting
