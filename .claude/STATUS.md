@@ -145,6 +145,8 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ Per-slot state struct + single `set_callback()` registration per slot (no std::function heap alloc per inference)
 - ✅ Memory leak verification: zero RSS growth over 10,000 INT8 inferences
 - ✅ INT8/FP16 quantization accuracy test (`test_quantization_accuracy.py`; FP16 cosine ≈1.000, INT8 cosine ≈0.9998)
+- ✅ Debug-only dispatch profiler (`runtime_profiler.hpp`): per-stage timing (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) enabled via `OAAX_PROFILE=1` (auto-set for Debug builds); zero overhead in Release
+- ✅ Multi-GPU auto-detection: when `device_type="GPU"` and multiple GPUs present, automatically constructs `MULTI:GPU.0,GPU.1,...` string; use `perf_hint=cumulative_throughput` for best aggregate FPS
 
 **Goals:**
 1. **Comprehensive Testing**
@@ -161,6 +163,8 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
    - ✅ Zero-copy output (`set_output_tensor`)
    - ✅ Semaphore-driven dispatch (no polling, no sleep)
    - ✅ Single callback registration per slot (no per-inference std::function alloc)
+   - ✅ Multi-GPU auto-detection (MULTI plugin, `cumulative_throughput` hint)
+   - ✅ Debug-only profiler (`OAAX_PROFILE=1`); zero overhead in Release
    - ☐ Model caching across `runtime_model_loading` calls
 
 4. **Packaging**
@@ -190,9 +194,9 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 **Goals:**
 1. **Multi-Device Support**
+   - ✅ Multi-GPU auto-detection and load distribution via MULTI plugin
    - Heterogeneous execution (CPU+GPU)
-   - Automatic device selection
-   - Load balancing across devices
+   - Automatic device selection (AUTO plugin)
    - Device-specific tuning
 
 2. **Extended Format Support**
@@ -271,24 +275,35 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ---
 
-## Performance Benchmarks (Phase 3, Intel Core i7-13700K)
+## Performance Benchmarks (Phase 3, Intel Core i7-12700K)
 
-Measured with `benchmark_app -hint throughput` and `yolo_test --perf-hint throughput` (300 runs, 5 warmup).
+### CPU — `benchmark_app` vs `yolo_test` (throughput hint, 50 runs)
 
-| Tool | Model | Precision | Device | Throughput |
-|------|-------|-----------|--------|------------|
-| benchmark_app | yolo11n | FP32 | CPU | ~95.6 FPS |
-| benchmark_app | yolo11n | FP16 | CPU | ~98.6 FPS |
-| benchmark_app | yolo11n | INT8 | CPU | **~244 FPS** |
-| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~97.7 FPS |
-| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~98.1 FPS |
-| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~237 FPS |
-| benchmark_app | yolov8n | FP32 | CPU | ~84 FPS |
-| benchmark_app | yolov8n | INT8 | CPU | ~242 FPS |
-| yolo_test (OAAX) | yolov8n | FP32 | CPU | ~84.8 FPS |
-| yolo_test (OAAX) | yolov8n | INT8 | CPU | ~235 FPS |
+| Tool | Model | Precision | Throughput |
+|------|-------|-----------|------------|
+| benchmark_app | yolo11n | FP32 | ~95.6 FPS |
+| benchmark_app | yolo11n | FP16 | ~98.6 FPS |
+| benchmark_app | yolo11n | INT8 | **~244 FPS** |
+| yolo_test (OAAX) | yolo11n | FP32 | ~97.7 FPS |
+| yolo_test (OAAX) | yolo11n | FP16 | ~98.1 FPS |
+| yolo_test (OAAX) | yolo11n | INT8 | ~237 FPS |
+| benchmark_app | yolov8n | FP32 | ~84 FPS |
+| yolo_test (OAAX) | yolov8n | FP32 | ~84.8 FPS |
 
-OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8. The remaining INT8 gap is manager dispatch overhead at 235+ FPS.
+OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8.
+
+### GPU — `benchmark_app` vs `yolo_test` (YOLOv8n FP32, latency hint, 50 runs)
+
+| Tool | Device | Throughput | Notes |
+|------|--------|------------|-------|
+| benchmark_app | GPU (iGPU) | ~72.8 FPS | No H2D/D2H — tensors stay on GPU |
+| yolo_test (OAAX) | GPU.0 (iGPU) | ~68 FPS | ~7% gap from per-inference H2D+D2H transfers |
+| yolo_test (OAAX) | GPU.1 (dGPU RTX A4000) | ~52 FPS | OpenCL path on NVIDIA; TensorRT would be faster |
+| yolo_test (OAAX) | GPU MULTI, latency | ~68 FPS | Routes to fastest device (iGPU wins) |
+| yolo_test (OAAX) | GPU MULTI, cumulative_throughput | **~114 FPS** | Both GPUs active; ~95% of theoretical sum |
+| yolo_test (OAAX) | GPU MULTI, throughput | ~112 FPS | Effectively same as cumulative_throughput |
+
+**GPU gap explanation:** `benchmark_app` keeps tensors in GPU memory (no transfers). The OAAX runtime uses caller-provided CPU buffers, requiring H2D (input) and D2H (output) on every inference — adds ~1 ms on iGPU (cache coherency overhead on shared memory), ~0.4 ms PCIe latency on dGPU.
 
 ---
 
@@ -440,6 +455,19 @@ OAAX runtime matches `benchmark_app` within ~2% for FP32/FP16 and ~3% for INT8. 
 - **Rationale:** `MSVC` is only set after CMake detects the compiler during `project()`. Any `if(MSVC)` block before `project()` silently evaluates false, leaving variables like `OPENVINO_BIN_DIR` unset. `WIN32` is available at CMake startup.
 - **Impact:** Fixed Windows DLL bundling — `OPENVINO_BIN_DIR` was empty, causing the cmake -P script to copy nothing
 - **Status:** Fixed in CMakeLists.txt (line 30)
+
+**2026-04-12: Debug-only dispatch profiler (`OAAX_PROFILE`)**
+- **Decision:** Add `runtime_profiler.hpp` with `#ifdef OAAX_PROFILE` guards around atomic timing accumulators for all pipeline stages; enabled automatically for Debug builds via CMake
+- **Rationale:** Profiling confirmed dispatch overhead is <1.4% on CPU, <0.3% on GPU. The ~7% GPU throughput gap vs `benchmark_app` comes entirely from per-inference H2D+D2H memory transfers, not from runtime overhead
+- **Impact:** Zero overhead in Release builds (all macros expand to `((void)0)`); full pipeline breakdown available in Debug
+- **Status:** Implemented and validated
+
+**2026-04-12: Multi-GPU auto-detection with MULTI plugin**
+- **Decision:** When `device_type="GPU"` and `core->get_available_devices()` returns more than one GPU, automatically construct `MULTI:GPU.0,GPU.1,...` and compile once for all GPUs. Explicit device strings are left unchanged.
+- **Rationale:** OpenVINO's MULTI plugin distributes inference requests across devices transparently. With `cumulative_throughput` hint, combined throughput reaches ~95% of the theoretical sum (114 FPS vs 120 FPS theoretical on test hardware)
+- **Impact:** No API change required — callers set `device_type="GPU"` as before; with `perf_hint=cumulative_throughput` they get full multi-GPU benefit automatically
+- **Constraint:** `latency` hint with MULTI routes to the fastest single device (no multi-GPU benefit); use `cumulative_throughput` for throughput-oriented workloads
+- **Status:** Implemented, benchmarked
 
 **2026-04-11: Use cmake -P script for Windows DLL copy, not file(GLOB) at configure time**
 - **Decision:** Copy OpenVINO DLLs via `cmake -P copy_windows_dlls.cmake` invoked from `add_custom_command POST_BUILD`

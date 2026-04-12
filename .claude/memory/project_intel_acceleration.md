@@ -36,27 +36,54 @@ Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: pure-openvino
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `device_type` | `"CPU"` | `"CPU"`, `"GPU"`, `"NPU"` |
-| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` |
-| `num_requests` | (auto) | Always inferred from compiled model via `OPTIMAL_NUMBER_OF_INFER_REQUESTS`; not settable |
-| `precision` | `"FP32"` | Informational only |
+| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs detected), `"GPU.0"`, `"NPU"` |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"`. Use `cumulative_throughput` with multi-GPU for best aggregate FPS. |
 | `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |
 
-## Benchmark results (yolo_test, throughput hint, CPU)
+## Multi-GPU behaviour
+
+When `device_type="GPU"` and multiple GPUs are found, the runtime auto-constructs `MULTI:GPU.0,GPU.1,...`.
+- `latency` hint: routes to fastest single device (no multi-GPU benefit)
+- `cumulative_throughput` hint: saturates all GPUs; ~95% of theoretical sum
+
+Benchmark on i7-12700K (UHD 770 iGPU + RTX A4000 dGPU), YOLOv8n FP32:
+
+| Config | Hint | Throughput |
+|--------|------|------------|
+| GPU.0 only | latency | ~68 FPS |
+| GPU.1 only | latency | ~52 FPS |
+| MULTI auto | latency | ~68 FPS |
+| MULTI auto | cumulative_throughput | ~114 FPS |
+
+Note: iGPU outperforms RTX A4000 under OpenVINO because Intel's GPU plugin targets Intel hardware; NVIDIA runs via generic OpenCL.
+
+## GPU vs benchmark_app throughput gap
+
+`benchmark_app` keeps tensors in GPU memory — no H2D/D2H per inference.
+Our runtime uses caller-provided CPU buffers, adding per-inference transfers:
+- iGPU (shared memory): ~1 ms overhead (cache coherency) → ~7% gap
+- dGPU (PCIe): ~0.4 ms overhead, but inference is ~37 ms → gap lost in noise
+
+## Benchmark results (CPU, throughput hint, yolo_test)
 
 | Model | Precision | yolo_test FPS | benchmark_app FPS | Gap |
 |-------|-----------|---------------|-------------------|-----|
-| yolo11n | FP32 | ~100 | ~102 | <1% |
-| yolo11n | FP16 | ~95 | ~102 | ~7% |
-| yolo11n | INT8 | ~231 | ~255 | ~9% |
+| yolov8n | FP32 | ~84.8 | ~84 | <1% |
+| yolo11n | FP32 | ~97.7 | ~95.6 | <1% |
+| yolo11n | INT8 | ~237 | ~244 | ~3% |
 
-INT8 gap is dominated by memcpy (2.8 MB output × ~231/s ≈ 650 MB/s). Further reduction requires zero-copy API change.
+## Debug profiler
+
+`runtime_profiler.hpp` — enabled with `OAAX_PROFILE=1` (auto-set for Debug builds).
+Reports per-stage breakdown (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) in µs/inference on `runtime_destruction()`.
+Zero overhead in Release builds.
 
 ## yolo_test CLI
 
 ```
-./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
+./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput|cumulative_throughput]
 ```
 
-Uses `max_in_flight=10` and calls `runtime_return_output()` (not `deep_free_tensors_struct`) to return pool buffers.
+Uses `max_in_flight=5` hardcoded. Calls `runtime_return_output()` (not `deep_free_tensors_struct`) to return pool buffers.
+Average latency is skewed by queue depth with 1 infer slot — use **min latency** and **throughput** as the meaningful metrics.

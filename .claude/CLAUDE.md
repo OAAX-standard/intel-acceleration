@@ -83,18 +83,33 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 - `deps/` — vendored: spdlog, concurrentqueue, c-utilities
 
 **Inference architecture:**
-- N worker threads (one per `ov::InferRequest`) all compete on `input_tensors_queue`
-- Each worker runs its own `req.infer()` exclusively — no sharing between workers
+- Single manager thread dequeues inputs, acquires a free `ov::InferRequest` slot, and calls `start_async()`
+- Completion callbacks post results to `output_tensors_queue` and return the slot to the pool
 - Workers write output into a pre-allocated buffer pool (no malloc on hot path)
 - Results enqueue to `output_tensors_queue`; caller polls via `receive_output()`
 - FIFO ordering is NOT guaranteed when N > 1
+
+**Multi-GPU auto-detection:**
+When `device_type="GPU"` and multiple GPU devices are present, the runtime automatically constructs a `MULTI:GPU.0,GPU.1,...` device string and compiles for all GPUs. OpenVINO's MULTI plugin then distributes inference requests across them. Explicit device strings (e.g. `"GPU.0"`, `"MULTI:GPU.0,GPU.1"`) are passed through unchanged.
+
+Benchmark results on Intel Core i7-12700K (UHD 770 iGPU + RTX A4000 dGPU), YOLOv8n FP32:
+
+| Config | Hint | Infer requests | Throughput |
+|--------|------|---------------|------------|
+| GPU.0 (iGPU only) | latency | 1 | ~68 FPS |
+| GPU.1 (dGPU only) | latency | 1 | ~52 FPS |
+| GPU (MULTI auto) | latency | 2 | ~68 FPS (routes to fastest) |
+| GPU (MULTI auto) | cumulative_throughput | 8 | **~114 FPS** |
+| GPU (MULTI auto) | throughput | 8 | ~112 FPS |
+
+Note: iGPU outperforms the RTX A4000 here because OpenVINO's GPU plugin is optimised for Intel hardware; NVIDIA runs via a generic OpenCL path.
 
 **Runtime initialization args** (passed via `runtime_initialization_with_args`):
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `device_type` | `"CPU"` | `"CPU"`, `"GPU"`, `"NPU"` |
-| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS` |
+| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs found), `"GPU.0"`, `"NPU"` |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS`. Use `cumulative_throughput` with multi-GPU for best aggregate FPS. |
 | `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |
 

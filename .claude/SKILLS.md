@@ -258,6 +258,40 @@ extern "C" int runtime_model_loading(const char *model_path) {
 - File names must match (model.xml + model.bin)
 - `compile_model()` optimizes for target device
 
+### Pattern: Multi-GPU Auto-Detection
+
+**Location:** `runtime-library/src/runtime_core.cpp` (`runtime_model_loading`)
+
+When `device_type="GPU"`, check for multiple GPUs and upgrade to `MULTI:` automatically:
+
+```cpp
+string effective_device = device_type;
+if (device_type == "GPU") {
+  vector<string> gpus;
+  try {
+    for (const auto &d : core->get_available_devices())
+      if (d.rfind("GPU", 0) == 0) gpus.push_back(d);
+  } catch (...) {}
+  if (gpus.size() > 1) {
+    effective_device = "MULTI:";
+    for (size_t i = 0; i < gpus.size(); ++i) {
+      if (i > 0) effective_device += ",";
+      effective_device += gpus[i];
+    }
+    logger->info("Multiple GPUs detected — compiling for {}", effective_device);
+  }
+}
+compiled_model = std::make_shared<ov::CompiledModel>(
+    core->compile_model(model, effective_device, config));
+```
+
+**Key Points:**
+- `device_type="GPU"` triggers auto-detection; `"GPU.0"` or explicit `"MULTI:..."` strings are passed through unchanged
+- `optimal_number_of_infer_requests` with MULTI returns slots for all GPUs combined — the runtime scales automatically
+- For maximum throughput across all GPUs use `perf_hint=cumulative_throughput`; `latency` hint routes to the single fastest device
+- Benchmark on i7-12700K (iGPU UHD 770 + RTX A4000 via OpenCL): `latency` → ~68 FPS, `cumulative_throughput` → ~114 FPS (~95% of theoretical 120 FPS sum)
+- NVIDIA GPUs run via OpenVINO's generic OpenCL path — significantly slower than TensorRT; iGPU may outperform dGPU in this context
+
 ### Pattern: Run Inference
 
 **Location:** `runtime-library/src/runtime_core.cpp`
