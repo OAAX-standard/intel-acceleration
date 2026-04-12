@@ -220,21 +220,44 @@ extern "C" int runtime_model_loading(const char *model_path) {
       config[ov::hint::performance_mode.name()] =
           ov::hint::PerformanceMode::LATENCY;
 
+    // When the caller requests "GPU" and multiple GPU devices are present,
+    // automatically switch to the MULTI plugin so all GPUs share the load.
+    // Explicit device strings (e.g. "GPU.0", "MULTI:...") are left unchanged.
+    string effective_device = device_type;
+    if (device_type == "GPU") {
+      vector<string> gpus;
+      try {
+        for (const auto &d : core->get_available_devices())
+          if (d.rfind("GPU", 0) == 0) gpus.push_back(d);
+      } catch (...) {
+      }
+      if (gpus.size() > 1) {
+        effective_device = "MULTI:";
+        for (size_t i = 0; i < gpus.size(); ++i) {
+          if (i > 0) effective_device += ",";
+          effective_device += gpus[i];
+        }
+        logger->info("Multiple GPUs detected — compiling for {}",
+                     effective_device);
+      }
+    }
+
     try {
       compiled_model = std::make_shared<ov::CompiledModel>(
-          core->compile_model(model, device_type, config));
+          core->compile_model(model, effective_device, config));
     } catch (const std::exception &e) {
       if (device_type != "CPU") {
         logger->warn("Failed to compile model on {} ({}). Falling back to CPU.",
-                     device_type, e.what());
+                     effective_device, e.what());
         device_type = "CPU";
+        effective_device = "CPU";
         compiled_model = std::make_shared<ov::CompiledModel>(
             core->compile_model(model, "CPU", config));
       } else {
         throw;
       }
     }
-    logger->debug("Model compiled for device: {} (hint={})", device_type,
+    logger->debug("Model compiled for device: {} (hint={})", effective_device,
                   perf_hint);
 
     int actual_requests =
