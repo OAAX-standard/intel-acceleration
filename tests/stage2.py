@@ -199,9 +199,9 @@ def run_yolo_test(xml: Path, device: str, warmup: int, runs: int) -> tuple | Non
             print(f"  [output] {text[:400]}")
         return None
     result = (
-        parse_field(text, r"Avg\s*:\s*([\d.]+)"),
-        parse_field(text, r"Min\s*:\s*([\d.]+)"),
-        parse_field(text, r"p95\s*:\s*([\d.]+)"),
+        parse_field(text, r"Avg latency:\s+([\d.]+)"),
+        parse_field(text, r"Min latency:\s+([\d.]+)"),
+        parse_field(text, r"p95 latency:\s+([\d.]+)"),
         parse_field(text, r"Throughput\s*:\s*([\d.]+)"),
     )
     if not any(result):
