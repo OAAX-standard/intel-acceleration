@@ -1,119 +1,11 @@
 #include "zip_utils.hpp"
 
-#include <algorithm>
-#include <cstring>
 #include <filesystem>
 #include <random>
 #include <sstream>
 #include <string>
-#include <vector>
 
 #include "miniz.h"
-
-// ---------------------------------------------------------------------------
-// Little-endian reads from a raw byte buffer
-// ---------------------------------------------------------------------------
-
-static uint16_t le16(const uint8_t *p) {
-  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-static uint32_t le32(const uint8_t *p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-         ((uint32_t)p[3] << 24);
-}
-
-// ---------------------------------------------------------------------------
-// End of Central Directory search
-// ---------------------------------------------------------------------------
-
-// Searches the last min(65557, file_size) bytes for the EOCD signature so it
-// tolerates zip archives with a comment.
-static bool find_eocd(FILE *f, uint32_t &cd_offset, uint16_t &cd_count) {
-  if (fseek(f, 0, SEEK_END) != 0) return false;
-  long file_size = ftell(f);
-  if (file_size < 22) return false;
-
-  long buf_size = std::min(file_size, 65557L);
-  std::vector<uint8_t> buf(buf_size);
-  if (fseek(f, file_size - buf_size, SEEK_SET) != 0) return false;
-  if ((long)fread(buf.data(), 1, buf_size, f) != buf_size) return false;
-
-  for (long i = buf_size - 22; i >= 0; --i) {
-    if (buf[i] == 0x50 && buf[i + 1] == 0x4b && buf[i + 2] == 0x05 &&
-        buf[i + 3] == 0x06) {
-      cd_count = le16(buf.data() + i + 10);   // total central directory entries
-      cd_offset = le32(buf.data() + i + 16);  // offset of central directory
-      return true;
-    }
-  }
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// DEFLATE decompression (zip compression method 8) via vendored miniz
-// ---------------------------------------------------------------------------
-
-// Uses miniz inflate with windowBits=-15 (raw deflate, no zlib header/trailer).
-// miniz is a cross-platform DEFLATE implementation with a zlib-compatible API,
-// so this code compiles on Linux, Windows, and macOS with zero system
-// dependencies.
-static bool inflate_entry(FILE *in, uint32_t comp_size,
-                          uint32_t /*uncomp_size*/, FILE *out) {
-  const size_t CHUNK = 65536;
-  std::vector<uint8_t> in_buf(CHUNK), out_buf(CHUNK);
-
-  mz_stream strm{};
-  if (mz_inflateInit2(&strm, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) return false;
-
-  uint32_t remaining = comp_size;
-  int ret = MZ_OK;
-
-  while (remaining > 0 && ret != MZ_STREAM_END) {
-    size_t to_read = std::min((size_t)remaining, CHUNK);
-    size_t nread = fread(in_buf.data(), 1, to_read, in);
-    if (nread == 0) break;
-    remaining -= (uint32_t)nread;
-
-    strm.next_in = in_buf.data();
-    strm.avail_in = (mz_uint32)nread;
-
-    do {
-      strm.next_out = out_buf.data();
-      strm.avail_out = (mz_uint32)CHUNK;
-      ret = mz_inflate(&strm, MZ_NO_FLUSH);
-      if (ret == MZ_STREAM_ERROR || ret == MZ_DATA_ERROR ||
-          ret == MZ_MEM_ERROR) {
-        mz_inflateEnd(&strm);
-        return false;
-      }
-      size_t produced = CHUNK - strm.avail_out;
-      if (fwrite(out_buf.data(), 1, produced, out) != produced) {
-        mz_inflateEnd(&strm);
-        return false;
-      }
-    } while (strm.avail_out == 0);
-  }
-
-  mz_inflateEnd(&strm);
-  return ret == MZ_STREAM_END;
-}
-
-// ---------------------------------------------------------------------------
-// STORE entry (compression method 0 — verbatim copy)
-// ---------------------------------------------------------------------------
-
-static bool copy_entry(FILE *in, uint32_t comp_size, FILE *out) {
-  std::vector<uint8_t> buf(65536);
-  uint32_t remaining = comp_size;
-  while (remaining > 0) {
-    size_t chunk = std::min((size_t)remaining, buf.size());
-    if (fread(buf.data(), 1, chunk, in) != chunk) return false;
-    if (fwrite(buf.data(), 1, chunk, out) != chunk) return false;
-    remaining -= (uint32_t)chunk;
-  }
-  return true;
-}
 
 // ---------------------------------------------------------------------------
 // Temp directory (cross-platform via std::filesystem)
@@ -141,99 +33,47 @@ static std::string create_temp_dir() {
 
 std::string extract_zip_model(const std::string &zip_path,
                               std::string &out_temp_dir) {
-  FILE *f = fopen(zip_path.c_str(), "rb");
-  if (!f) return "";
+  mz_zip_archive zip{};
+  if (!mz_zip_reader_init_file(&zip, zip_path.c_str(), 0)) return "";
 
-  uint32_t cd_offset;
-  uint16_t cd_count;
-  if (!find_eocd(f, cd_offset, cd_count) || cd_count == 0) {
-    fclose(f);
+  mz_uint num_files = mz_zip_reader_get_num_files(&zip);
+  if (num_files == 0) {
+    mz_zip_reader_end(&zip);
     return "";
   }
 
   std::string temp_dir = create_temp_dir();
   if (temp_dir.empty()) {
-    fclose(f);
+    mz_zip_reader_end(&zip);
     return "";
   }
   out_temp_dir = temp_dir;
 
   std::string xml_path;
 
-  if (fseek(f, (long)cd_offset, SEEK_SET) != 0) {
-    fclose(f);
-    return "";
-  }
+  for (mz_uint i = 0; i < num_files; ++i) {
+    if (mz_zip_reader_is_file_a_directory(&zip, i)) continue;
 
-  for (uint16_t i = 0; i < cd_count; ++i) {
-    // Central directory entry fixed header: 46 bytes.
-    uint8_t cd[46];
-    if (fread(cd, 1, 46, f) != 46) break;
-    if (le32(cd) != 0x02014b50u) break;  // bad signature
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(&zip, i, &stat)) continue;
 
-    uint16_t compression = le16(cd + 10);
-    uint32_t comp_size = le32(cd + 20);
-    uint32_t uncomp_size = le32(cd + 24);
-    uint16_t fname_len = le16(cd + 28);
-    uint16_t extra_len = le16(cd + 30);
-    uint16_t comment_len = le16(cd + 32);
-    uint32_t local_offset = le32(cd + 42);
-
-    std::string filename(fname_len, '\0');
-    if (fread(filename.data(), 1, fname_len, f) != fname_len) break;
-    if (fseek(f, extra_len + comment_len, SEEK_CUR) != 0) break;
-    long cd_pos = ftell(f);
-
-    // Skip directory entries.
-    if (!filename.empty() && filename.back() == '/') continue;
-
-    // Jump to the local file header to get the exact data offset.
-    if (fseek(f, (long)local_offset, SEEK_SET) != 0) {
-      fseek(f, cd_pos, SEEK_SET);
-      continue;
-    }
-
-    uint8_t lh[30];
-    if (fread(lh, 1, 30, f) != 30 || le32(lh) != 0x04034b50u) {
-      fseek(f, cd_pos, SEEK_SET);
-      continue;
-    }
-    uint16_t lh_fname_len = le16(lh + 26);
-    uint16_t lh_extra_len = le16(lh + 28);
-    if (fseek(f, lh_fname_len + lh_extra_len, SEEK_CUR) != 0) {
-      fseek(f, cd_pos, SEEK_SET);
-      continue;
-    }
-
-    // Build output path using filesystem to handle any OS separator.
+    std::string filename = stat.m_filename;
     std::string out_path =
         (std::filesystem::path(temp_dir) / filename).string();
-    FILE *out = fopen(out_path.c_str(), "wb");
-    if (!out) {
-      fseek(f, cd_pos, SEEK_SET);
+
+    if (!mz_zip_reader_extract_to_file(&zip, i, out_path.c_str(), 0)) {
+      std::error_code ec;
+      std::filesystem::remove(out_path, ec);
       continue;
     }
 
-    bool ok = false;
-    if (compression == 0)
-      ok = copy_entry(f, comp_size, out);
-    else if (compression == 8)
-      ok = inflate_entry(f, comp_size, uncomp_size, out);
-
-    fclose(out);
-
-    if (!ok) {
-      std::error_code ec;
-      std::filesystem::remove(out_path, ec);
-    } else if (xml_path.empty() && fname_len >= 4 &&
-               filename.compare(filename.size() - 4, 4, ".xml") == 0) {
+    if (xml_path.empty() && filename.size() >= 4 &&
+        filename.compare(filename.size() - 4, 4, ".xml") == 0) {
       xml_path = out_path;
     }
-
-    fseek(f, cd_pos, SEEK_SET);
   }
 
-  fclose(f);
+  mz_zip_reader_end(&zip);
   return xml_path;
 }
 
