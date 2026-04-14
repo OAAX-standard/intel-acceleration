@@ -1,5 +1,11 @@
 # Folder for storing build artifacts
-artifacts 
+artifacts
+
+# Compiled model cache (Stage 1 output, large binaries)
+tests/compiled_models/
+tests/benchmark_models/
+tests/benchmark_calibration/
+tests/test_models/
 
 # Folders
 *.egg-info

@@ -1,34 +1,94 @@
 # intel-acceleration
 
-This folder contains the source code of the shared library and the Docker image that can be used by AI application developers to benefit from the acceleration offered by Intel CPU, GPU and NPU on x86_64 machines.
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Build](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build.yml/badge.svg)](https://github.com/OAAX-standard/intel-acceleration/actions/workflows/build.yml)
 
-> To learn how to deploy on Intel, please check out the technical docs at [https://docs.oaax.org/Intel/](https://docs.oaax.org/Intel/)
+OAAX implementation for Intel hardware (CPU, GPU, NPU) on x86_64. Two components:
+
+- **Conversion Toolchain** — Docker container that converts an ONNX model to OpenVINO IR with optional FP16 compression or INT8 quantization.
+- **Runtime Library** — C++ shared library that loads an OpenVINO IR model and runs inference via the OpenVINO native API.
+
+> Full deployment guide: [https://docs.oaax.org/Intel/](https://docs.oaax.org/Intel/)
 
 ## Repository structure
 
-The repository is structured as follows:
+```
+conversion-toolchain/   ONNX → OpenVINO IR conversion (Docker)
+runtime-library/        C++ shared library for inference (CPU/GPU/NPU)
+tests/                  Conversion tests, YOLO integration tests, runtime benchmarks
+scripts/                CI setup helpers
+```
 
-- [Conversion toolchain](conversion-toolchain): Contains the source code for building the OAAX conversion toolchain.
-- [Runtime library](runtime-library): Contains the source code for building the OAAX runtime.
+## Pre-built artifacts
 
-Each folder contains a README file that provides more details about the different parts of the implementation.
+Pre-built toolchain images and runtime libraries are available in the
+[contributions](https://github.com/oaax-standard/contributions) repository.
+Usage examples are in the [examples](https://github.com/oaax-standard/examples) repository.
 
-## Building the implementation
+## Building from source
 
-You can build the conversion toolchain and the runtime separately by calling the (Shell) build scripts in each folder.
-That will create an `artifacts/` directory in each folder containing the compiled binaries: a compressed Docker image and shared libraries (for X86_64 target machines) respectively.
+```bash
+# Conversion toolchain (produces a Docker image tarball)
+cd conversion-toolchain
+IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
 
-## Pre-built OAAX artifacts
+# Runtime library (Linux x86_64, produces libRuntimeLibrary.so + OpenVINO .so)
+cd runtime-library
+bash build-runtimes.sh        # set OPENVINO_DIR if not at /opt/intel/openvino/runtime
+```
 
-If you're interested in using the OAAX toolchain and runtime without building them, you can find them in the
-[contributions](https://github.com/oaax-standard/contributions) repository.   
-Additionally, you can find a diverse set of examples and applications of using the OAAX runtime in the 
-[examples](https://github.com/oaax-standard/examples) repository.
+See [`conversion-toolchain/README.md`](conversion-toolchain/README.md) and
+[`runtime-library/README.md`](runtime-library/README.md) for detailed instructions.
+
+## Testing
+
+Tests run in two stages. Stage 1 compiles models; Stage 2 benchmarks them.
+
+```bash
+# One-time setup
+uv venv && source .venv/bin/activate
+uv sync --extra integration --extra quantization
+
+# Stage 1 — compile YOLO models to FP32/FP16/INT8 IR and run conversion tests
+python tests/stage1.py
+
+# Stage 2 — benchmark with benchmark_app + yolo_test across all variants and devices
+python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
+```
+
+Individual test suites:
+
+```bash
+pytest tests/test_conversion.py -v             # toolchain unit tests
+pytest tests/test_yolo_integration.py -v       # YOLO IR validation
+pytest tests/test_quantization_accuracy.py -v  # INT8/FP16 accuracy vs FP32 baseline
+pytest tests/test_docker.py -v                 # Docker image tests (image must be built)
+pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
+```
+
+## Benchmark results (Intel Core i7-12700K, hint=throughput)
+
+| Tool | Model | Precision | Device | Throughput |
+|------|-------|-----------|--------|------------|
+| benchmark_app | yolo11n | FP32 | CPU | ~100 FPS |
+| benchmark_app | yolo11n | FP16 | CPU | ~97 FPS |
+| benchmark_app | yolo11n | INT8 | CPU | **~245 FPS** |
+| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~96 FPS |
+| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~97 FPS |
+| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~236 FPS |
+| benchmark_app | yolo11n | FP32 | GPU | ~82 FPS |
+| benchmark_app | yolo11n | INT8 | GPU | ~113 FPS |
+| yolo_test (OAAX) | yolo11n | FP32 | GPU | ~75 FPS |
+| yolo_test (OAAX) | yolo11n | INT8 | GPU | ~101 FPS |
+
+The OAAX runtime matches `benchmark_app` within ~4% on CPU across all precisions.
+The GPU gap (~9–13%) is driven by dispatch overhead through the C API boundary becoming
+significant at higher GPU throughput; on CPU this cost is negligible relative to inference time.
 
 ## Contributing
 
-If you're interested in contributing to the OAAX reference implementation, please check out the [CONTRIBUTING.md](CONTRIBUTING.md) file for more information on how to get started.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for more details.
+Apache License 2.0 — see [LICENSE](LICENSE).

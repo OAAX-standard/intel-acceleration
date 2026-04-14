@@ -46,8 +46,14 @@ pushd "%BUILD_DIR%"
 REM Delete all files in the build directory quietly (ignore errors/output)
 del /q * >nul 2>&1
 
+REM Resolve OpenVINO directory (set by CI or default to archive install location)
+if not defined OPENVINO_DIR (
+	set "OPENVINO_DIR=C:\intel\openvino\runtime"
+)
+echo Using OpenVINO from: %OPENVINO_DIR%
+
 REM Run CMake to generate build files using the parent directory as the source
-cmake .. -DRUNTIME_VERSION="%RUNTIME_VERSION%"
+cmake .. -DRUNTIME_VERSION="%RUNTIME_VERSION%" -DOPENVINO_DIR="%OPENVINO_DIR%"
 
 REM If CMake failed, exit the script with error
 if errorlevel 1 exit /b 1
@@ -70,14 +76,15 @@ echo Copying shared libraries to artifacts directory...
 REM Create a Windows subdirectory in artifacts if it doesn't exist
 if not exist "%ARTIFACTS_DIR%\Windows" mkdir "%ARTIFACTS_DIR%\Windows"
 
-REM Copy all DLLs from Release to the artifacts Windows directory
+REM Copy all DLLs and test binaries from Release to the artifacts Windows directory
 copy Release\*.dll "%ARTIFACTS_DIR%\Windows\"
+copy Release\yolo_test.exe "%ARTIFACTS_DIR%\Windows\"
 
-REM Create a gzipped tarball of the DLLs in the Windows artifacts directory
-tar czf "%ARTIFACTS_DIR%\runtime-library-X86_64-Windows.tar.gz" -C "%ARTIFACTS_DIR%\Windows" *.dll
+REM Create a gzipped tarball of the artifacts
+tar czf "%ARTIFACTS_DIR%\runtime-library-X86_64-Windows.tar.gz" -C "%ARTIFACTS_DIR%\Windows" .
 
 REM Print confirmation message
-echo Shared libraries for Windows have been copied to "%ARTIFACTS_DIR%\Windows\"
+echo Shared libraries and test binaries for Windows have been copied to "%ARTIFACTS_DIR%\Windows\"
 
 REM Restore previous directory from the stack
 popd

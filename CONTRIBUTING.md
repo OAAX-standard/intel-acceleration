@@ -1,189 +1,117 @@
-# Contributing to OAAX OpenVINO implementation
+# Contributing to OAAX Intel Acceleration
 
-Thank you for your interest in contributing to OAAX's OpenVINO implementation! We welcome contributions from the community to improve the current implementation of the OAAX runtime and conversion toolchain.
-
-Before you start contributing, please take a moment to read through [OAAX general CONTRIBUTING document](https://github.com/OAAX-standard/OAAX/blob/main/CONTRIBUTING.md). It sets out the guidelines for contributing to OAAX projects, including code style, commit message format, and other important information.
-
-## Table of contents
-- [How to contribute](#how-to-contribute)
-- [Development environment](#development-environment)
-- [Development Setup](#development-setup)  
-- [Code Style & Standards](#code-style--standards)  
-- [Pre-commit Hooks & Automation](#pre-commit-hooks--automation)  
-- [Testing Changes Locally](#testing-changes-locally)  
-- [Project Structure & Architecture Overview](#project-structure--architecture-overview)  
-- [Development Dependencies](#development-dependencies)  
-- [First Contribution Guide](#first-contribution-guide)  
-- [Submitting Pull Requests](#submitting-pull-requests)  
+Thank you for your interest in contributing! Before you start, please read the
+[OAAX general contributing guide](https://github.com/OAAX-standard/OAAX/blob/main/CONTRIBUTING.md)
+for project-wide conventions (commit message format, code style, etc.).
 
 ## How to contribute
 
-The OAAX OpenVINO implementation is built to be able to make use of Intel's CPU, GPU, and NPU for model inference. If you'd like to suggest improvements to the documentation or implementation, report a bug, or contribute a new feature, please follow these steps:
-1. **Open an issue** in the repository to discuss your idea or improvement.
-2. **Fork the repository** and create a new branch for your changes.
-3. **Make your changes** and commit them with a clear message.
-4. **Push your changes** to your forked repository.
-5. **Submit a pull request** to the main repository for review.
-
+1. **Open an issue** to discuss the bug or feature before writing code.
+2. **Fork the repository** and create a branch from `main`.
+3. **Make your changes**, keeping each PR focused on one thing.
+4. **Run tests** locally (see below) to confirm nothing is broken.
+5. **Push your branch** and open a pull request.
 
 ## Development environment
 
-The OAAX OpenVINO implementation has been tested for building on x86_64 architecture machines running Ubuntu 22.04 or later.
-
-### Runtime
-
-The runtime library is built using CMake and several other dependencies. You can easily install them on a host machine by running this command (assuming you have cloned the repository):
+Tested on x86_64 Ubuntu 22.04+. The setup script installs all build dependencies:
 
 ```bash
 sudo bash scripts/setup-env.sh
 ```
 
-### Conversion toolchain
+Requirements:
+- Git 2.30+
+- CMake 3.10.2+
+- GCC 9.5+ / Clang 10+ with C++17
+- Docker 20.10+ (for toolchain builds)
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) (Python package manager)
 
-The conversion toolchain is built using Docker and requires Docker to be installed on your machine. You can find instructions for installing Docker [here](https://docs.docker.com/get-docker/).
+## First-time setup
 
-## Development Setup
-
-Follow these steps to get a local development environment up and running:
-
-### 1. Clone the repository  
-
-```
+```bash
+# Clone
 git clone https://github.com/OAAX-standard/intel-acceleration.git
 cd intel-acceleration
+
+# Python environment + test dependencies
+uv venv && source .venv/bin/activate
+uv sync --extra integration --extra quantization
+
+# Pre-commit hooks (ruff, clang-format, shellcheck, hadolint)
+pip install pre-commit
+pre-commit install
 ```
 
-### 2. Choose your target platform
+After `pre-commit install`, every `git commit` automatically runs linters and
+formatters. To run them manually across the whole repo:
 
-This repository contains two major parts:
-- **conversion-toolchain/:** the source for building the OAAX conversion toolchain
-- **runtime-library/:** the source for building the OAAX runtime
-
-Each part has its own README with more specific build instructions.
-
-### 3. Install required tools & versions
-
-Ensure you have the following minimum versions installed:
-- Git (>= 2.30)
-- CMake (>= 3.15)
-- A C++ compiler supporting C++17 (e.g., g++ 9+, clang 10+)
-- Docker (for building the toolchain images)
-- Python 3.8+ (if you work with Python scripts)
-- Any OS prerequisites (Ubuntu 22.04)
-
-### 4. Build locally
-
-For example, to build the runtime library:
-
-```runtimelib
-cd runtime-library
-./build-runtimes.sh 
+```bash
+pre-commit run --all-files
 ```
-Artifacts will be placed in **runtime-library/artifacts/**.
-Similarly for the conversion toolchain:
 
-```conversiontool
+## Building
+
+```bash
+# Conversion toolchain (Docker image)
 cd conversion-toolchain
-./build-toolchain.sh
+IMAGE_NAME=oaax-intel-toolchain bash build-toolchain.sh
+
+# Runtime library (Linux x86_64)
+cd runtime-library
+OPENVINO_DIR=/opt/intel/openvino/runtime bash build-runtimes.sh
 ```
 
-### 5. IDE / Editor recommendation
+See each component's README for more options.
 
-- Use Visual Studio Code or CLion.
-- Enable “format on save” with the style guide below.
-- Configure the include paths to the **runtime-library/include** folder and link to **artifacts**.
-- Use the built-in debugger for stepping through runtime code.
+## Testing locally
 
-### 6. Troubleshooting & common issues
+```bash
+# Stage 1: compile YOLO models to FP32/FP16/INT8 IR, run conversion tests
+python tests/stage1.py
 
-- If Docker build fails, verify you have sufficient permissions and available disk space.
-- If CMake cannot locate dependencies, check environment variables (e.g., **ONNX_RUNTIME_ROOT**).
-- Clean old build artifacts when switching branches: ```git clean -fdx```.
+# Stage 2: benchmark with benchmark_app + yolo_test
+python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
-## Code Style & Standards
+# Individual suites
+pytest tests/test_conversion.py -v
+pytest tests/test_yolo_integration.py -v
+pytest tests/test_quantization_accuracy.py -v
 
-To keep the codebase clean and maintainable, we follow these conventions:
-- Formatting: Use clang-format (version 12+) with the style file at .clang-format.
-- Naming:
-	- Classes: **PascalCase**
-	- Methods / functions: **camelCase**
-	- Variables: **snake_case**
-	- Constants: **kConstantName**
-- File organization:
-	- **include/** for public headers
-	- **src/** for implementation files
-	- **tests/** (if any) for test code
-- Commit messages: Follow the Conventional Commits format:
-
-```makefile
-feat(module): add support for X
-fix(runtime): correct buffer overflow
-docs: update development setup
-```
-- Code comments: Use Doxygen-style comments for public APIs.
-
-## Project Structure & Architecture Overview
-
-### High-level overview:
-
-```structure
-intel-acceleration/
-├── conversion-toolchain/  # Convert ONNX models into XPU-specific binaries  
-├── runtime-library/       # Shared library + APIs to load and run binaries  
-├── scripts/               # Utility scripts (model download, benchmarking)  
-├── .github/workflows/     # CI pipelines  
-├── CHANGELOG.md  
-├── VERSION  
-└── README.md
+# C++ smoke tests
+cd runtime-library/build
+./simple_test
+./yolo_test /path/to/model.xml [device] [--runs 300] [--warmup 5] [--perf-hint throughput]
 ```
 
-### Key modules
+## Code style
 
-- **Toolchain:** Takes an ONNX model and produces a format optimized for Intel-based XPU using the OpenVINO Execution Provider.
-- **Runtime:** A shared library that loads the optimized model and executes inference using the XPU.
-- **Artifacts:** The build outputs (Docker images + shared libraries) for deployment.
+| Language | Tool | Config |
+|----------|------|--------|
+| Python | ruff (lint + format) | `pyproject.toml` |
+| C++ | clang-format | `.clang-format` (Google style, 120-char limit) |
+| Shell | shellcheck | default |
+| Dockerfile | hadolint | default |
 
-### Data flow
+Naming conventions for C++:
+- Classes: `PascalCase`
+- Functions / methods: `snake_case` (matching the public C API style)
+- Variables: `snake_case`
+- Constants: `kConstantName`
 
-1. Developer provides an ONNX model.
-2. Conversion toolchain processes it → produces XPU‐optimized model.
-3. Runtime loads optimized model and executes inference calls.
-4. Application uses its API to send inputs / receive outputs.
+Use Doxygen-style comments for any public API additions.
 
-This architecture allows plug-ins for different accelerators while keeping the high-level API stable.
+## Submitting a pull request
 
-## Development Dependencies
+- Rebase on the latest `main` before opening the PR.
+- Fill out the PR template: include a clear description and link to the related issue.
+- All CI checks must pass.
+- If your change affects the public C API (`runtime_core.hpp` or `tensors_struct.h`),
+  note it explicitly — the API must remain backwards-compatible.
+- Update `CHANGELOG.md` under an `[Unreleased]` section.
 
-Please maintain a **requirements-dev.txt** (or equivalent) for any developer-only packages. Example entries:
+## Adding dependencies
 
-```
-pre-commit>=2.20
-clang-format>=12
-cppcheck>=2.3
-pytest>=7.0        # if Python tests exist
-```
-
-If you add new dev dependencies, update this file and notify in your PR.
-
-## First Contribution Guide
-
-If this is your first time contributing:
-1. Fork the repository (top-right corner of GitHub).
-2. Clone your fork locally (```git clone …```).
-3. Create a branch (e.g., ```feat-new-accelerator``` or ```fix-cleanup```).
-4. Ensure you pull the latest changes from **main** and rebase if needed.
-5. Make small, focused changes and verify build/tests succeed.
-6. Push your branch and open a pull request.
-
-Focus on delivering one change per PR to simplify review.
-
-## Submitting Pull Requests
-
-When you’re ready to submit:
-- Ensure your branch is rebased on the latest **main**.
-- Run all pre-commit hooks, run builds/tests locally.
-- Fill out the PR template (if provided), and include:
-	- A clear title and description.
-	- Reference to any issue (if applicable).
-	- Screenshots or logs if the change affects output.
-- Be responsive to review feedback — our reviewers may ask for adjustments.
+- **Python:** add to `pyproject.toml` and document the reason in your PR.
+- **C++:** add to `CMakeLists.txt`; prefer vendoring small libraries under `deps/`.

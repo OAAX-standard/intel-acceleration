@@ -1,0 +1,24 @@
+# CODEOWNERS — auto-assigns reviewers when files are changed in a PR.
+# Syntax: <path pattern>  <@github-username or @org/team>
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything not matched below
+*                                   @aassis
+
+# Runtime library — C++ inference engine
+runtime-library/                    @aassis
+
+# Conversion toolchain — Python / Docker
+conversion-toolchain/               @aassis
+
+# Public C API — changes here are breaking-change candidates
+runtime-library/include/            @aassis
+
+# CI / build
+.github/                            @aassis
+scripts/                            @aassis
+
+# Legal / compliance
+LICENSE                             @aassis
+ThirdPartyNotices.txt               @aassis
+SECURITY.md                         @aassis

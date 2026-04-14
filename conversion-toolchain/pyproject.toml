@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conversion_toolchain"
+dynamic = ["version"]
+description = "OAAX Intel Acceleration Conversion Toolchain - OpenVINO Native with Quantization"
+authors = [
+    {name = "Ayoub Assis", email = "aassis@networkoptix.com"}
+]
+requires-python = ">=3.13"
+dependencies = [
+    "openvino>=2026.1.0",
+    "lgg",
+    "pillow>=9.0",
+]
+
+[project.optional-dependencies]
+quantization = [
+    "nncf>=2.19.0,<3.0.0",
+]
+test = [
+    "pytest>=7.0",
+    "numpy>=1.21",
+    "onnx>=1.12",
+]
+integration = [
+    "pytest>=7.0",
+    "numpy>=1.21",
+    "ultralytics>=8.3.0",
+]
+all = [
+    "conversion_toolchain[quantization,test,integration]",
+]
+
+[project.scripts]
+conversion_toolchain = "conversion_toolchain.main:cli"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["conversion_toolchain*"]

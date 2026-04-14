@@ -1,8 +1,0 @@
-setuptools
-wheel
-pytest
-numpy>=1.19.0
-sympy>=1.10
-packaging
-cerberus
-psutil

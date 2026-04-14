@@ -1,38 +1,170 @@
-# OAAX OpenVINO runtime library
+# OAAX Runtime Library (OpenVINO)
 
-This OpenVINO implementation of an OAAX runtime is a wrapper around the [ONNX Runtime](https://github.com/microsoft/onnxruntime) with the OpenVINO execution provider.
+C++ shared library implementing the OAAX inference interface on Intel hardware using the OpenVINO native C++ API. Supports CPU, GPU, and NPU on x86_64 Linux and Windows.
 
-## Pre-requisites
+## Prerequisites
 
-Before you start, make sure you have set up your environment using the following script:
+- **OpenVINO 2026.1.0** archive from [storage.openvinotoolkit.org](https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/)
+- **GCC 9.5+** and cross-compilation toolchain at `/opt/x86_64-unknown-linux-gnu-gcc-9.5.0` (Linux)
+- **CMake 3.10.2+**
 
-```bash
-bash scripts/setup-env.sh
-```
-
-This will install the required dependencies and set up the environment for building the OAAX runtime.
-The script will also set up the cross-compilation toolchain for the target architecture (X86_64).
-
-## Getting started
-
-The OAAX runtime is leveraging the ONNX Runtime library to load and run the model. ORT requires
-the [CPU INFOrmation library](https://github.com/pytorch/cpuinfo), and the [RE2 library](https://github.com/google/re2).
-
-All of these dependencies are included in the `deps` directory, and are already cross-compiled for the target
-architecture using the compiler toolchain setup usnig the shell script above.
-However, you can recompile them separately by running the Shell scripts inside each directory.
-
-To build the OAAX runtime, run the following command:
+The CI setup script installs all build dependencies:
 
 ```bash
-bash build-runtimes.sh
+sudo bash scripts/setup-env.sh   # from the repo root
 ```
 
-This will create an `artifacts/` directory containing the compiled shared library: `libRuntimeLibrary.so` along with other openvino-related libraries.
+## Build
 
-## Running Inference using the OAAX runtime
+```bash
+cd runtime-library
+OPENVINO_DIR=/opt/intel/openvino/runtime bash build-runtimes.sh
+```
 
-To run the inference process, you need to have the optimized model file, the shared library built in the previous step, along with a simple C/C++ code that loads the shared library and the model and runs it. Ensure that you have all necessary OpenVINO-related libraries available reachable to the AI application by setting the `LD_LIBRARY_PATH` environment variable to include the path to the OpenVINO libraries.
+Output in `runtime-library/artifacts/X86_64/`:
 
-You can find diverse examples and applications of using the OAAX runtime in the
-[examples](https://github.com/oaax-standard/examples) repository.
+```
+libRuntimeLibrary.so       your runtime
+libopenvino.so.2610        OpenVINO core
+libopenvino_intel_cpu_plugin.so
+libopenvino_intel_gpu_plugin.so
+libopenvino_intel_npu_plugin.so
+libtbb.so.12               Intel TBB
+...
+```
+
+All `.so` files have `$ORIGIN` RPATH set so they find each other when deployed together.
+
+### Windows
+
+```bat
+cd runtime-library
+build-runtime.bat
+```
+
+Output in `runtime-library/artifacts/Windows/`:  `RuntimeLibrary.dll` + OpenVINO + TBB DLLs.
+
+## API usage
+
+Include `runtime_core.hpp` and link against `RuntimeLibrary`.
+
+```c
+#include "runtime_core.hpp"
+
+// 1. Initialize (device and performance hint are optional)
+char *keys[]   = {"device_type", "perf_hint"};
+void *values[] = {"CPU", "throughput"};
+runtime_initialization_with_args(2, keys, values);
+
+// 2. Load model (.xml file — .bin must be in the same directory)
+runtime_model_loading("/path/to/model.xml");
+
+// 3. Send input (runtime takes ownership; do not free after this call)
+send_input(input_tensors);
+
+// 4. Poll for result
+tensors_struct *output = NULL;
+while (receive_output(&output) != 0) {}   // non-blocking; retry until ready
+
+// 5. Use output, then return buffer to pool
+runtime_return_output(output);            // preferred over deep_free_tensors_struct
+
+// 6. Tear down
+runtime_destruction();
+```
+
+> **Important:** Use `runtime_return_output()` to release output buffers, not
+> `deep_free_tensors_struct()`. The runtime pre-allocates an output buffer pool for
+> zero-copy inference; `runtime_return_output()` recycles the buffer back into the pool.
+> `deep_free_tensors_struct()` frees the memory outright and should only be used if
+> you received the output after calling `runtime_destruction()`.
+
+## Configuration
+
+All parameters are passed as strings to `runtime_initialization_with_args`.
+
+| Key | Default | Values | Description |
+|-----|---------|--------|-------------|
+| `device_type` | `"CPU"` | `"CPU"` `"GPU"` `"NPU"` | Target inference device |
+| `perf_hint` | `"latency"` | `"latency"` `"throughput"` `"cumulative_throughput"` | OpenVINO performance mode |
+| `log_level` | `"2"` (info) | `"0"`–`"6"` | spdlog level: 0=trace, 2=info, 4=warn, 6=off |
+| `log_file` | `"runtime.log"` | any path | Log output file |
+
+If `device_type` compilation fails (e.g. no GPU present), the runtime automatically falls
+back to CPU and logs a warning.
+
+## Working with tensors
+
+`tensors_struct` is defined in `include/tensors_struct.h`. Use the provided helpers:
+
+```c
+// Allocate
+tensors_struct *ts = allocate_tensors_struct(1);
+ts->names[0]      = strdup("images");
+ts->ranks[0]      = 4;
+ts->shapes[0]     = malloc(4 * sizeof(size_t));
+ts->shapes[0][0]  = 1; ts->shapes[0][1] = 3;
+ts->shapes[0][2]  = 640; ts->shapes[0][3] = 640;
+ts->data_types[0] = DATA_TYPE_FLOAT;
+ts->data[0]       = malloc(1 * 3 * 640 * 640 * sizeof(float));
+
+// Free (only when NOT using runtime_return_output)
+deep_free_tensors_struct(ts);
+```
+
+Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_FLOAT16`, `DATA_TYPE_INT8`,
+`DATA_TYPE_UINT8`, `DATA_TYPE_INT32`, `DATA_TYPE_INT64`, and others — see `tensors_struct.h`.
+
+## Troubleshooting
+
+**OpenVINO not found at configure time**
+```
+CMake Error: OpenVINO not found at /opt/intel/openvino/runtime
+```
+Set `OPENVINO_DIR` to the `runtime/` subdirectory of your OpenVINO archive:
+```bash
+OPENVINO_DIR=/path/to/openvino_toolkit_.../runtime bash build-runtimes.sh
+```
+
+**Missing shared libraries at runtime**
+```
+error while loading shared libraries: libopenvino.so.2610: cannot open shared object file
+```
+All required `.so` files are in the `artifacts/X86_64/` directory. Deploy them alongside
+`libRuntimeLibrary.so` and set `LD_LIBRARY_PATH` if not using RPATH:
+```bash
+export LD_LIBRARY_PATH=/path/to/artifacts/X86_64:$LD_LIBRARY_PATH
+```
+
+**Model loading fails**
+Ensure you pass the `.xml` path (not `.bin`) and both files are in the same directory:
+```bash
+ls model.xml model.bin   # both must exist
+```
+
+## Project structure
+
+```
+runtime-library/
+├── src/
+│   ├── runtime_core.cpp    # inference pipeline (OpenVINO native API)
+│   └── runtime_utils.cpp   # OAAX ↔ OpenVINO type mapping
+├── include/
+│   ├── runtime_core.hpp    # public C API (OAAX interface)
+│   └── tensors_struct.h    # OAAX tensor structure and helpers
+├── deps/
+│   ├── spdlog/             # logging
+│   ├── concurrentqueue/    # lock-free queue
+│   └── tools/c-utilities/  # OAAX C utilities
+├── cmake/
+│   └── copy_windows_dlls.cmake
+├── CMakeLists.txt
+├── build-runtimes.sh       # Linux build script
+└── build-runtime.bat       # Windows build script
+```
+
+Test sources: `../tests/runtime/simple_test.cpp`, `../tests/runtime/yolo_test.cpp`
+
+## License
+
+See repository [LICENSE](../LICENSE).

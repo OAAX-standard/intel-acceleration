@@ -1,0 +1,7 @@
+test_models/
+.venv
+.pytest_cache
+input/
+output/
+bundles/
+__pycache__/

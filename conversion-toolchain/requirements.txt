@@ -1,5 +1,0 @@
-.
-lgg
-onnx
-onnxsim
-onnxruntime

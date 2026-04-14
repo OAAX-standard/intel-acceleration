@@ -1,0 +1,310 @@
+name: Build
+permissions:
+  contents: none
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-toolchain:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install s3cmd
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y s3cmd
+
+      - name: Build conversion toolchain image
+        run: bash conversion-toolchain/build-toolchain.sh
+
+      - name: Configure s3cmd
+        run: |
+          cat > ~/.s3cfg <<EOF
+          [default]
+          access_key = ${{ secrets.S3_ACCESS_KEY }}
+          secret_key = ${{ secrets.S3_SECRET_KEY }}
+          bucket_location = us-east-1
+          host_base = ${{ secrets.S3_ENDPOINT_URL }}
+          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
+          use_https = True
+          EOF
+
+      - name: Determine version
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            if [ -f VERSION ]; then
+              version=$(cat VERSION)
+            else
+              exit 1
+            fi
+          else
+            version=${{ github.head_ref }}
+          fi
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: Upload Docker image to S3
+        run: |
+          s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar"
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/latest/INTEL/oaax-intel-toolchain.tar"
+          fi
+
+  build-runtimes-for-ubuntu:
+    timeout-minutes: 20
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+          lfs: true
+
+      - name: Set up environment
+        run: |
+          sudo bash scripts/setup-env.sh
+          echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
+
+      - name: Cross-compile runtimes
+        run: bash runtime-library/build-runtimes.sh
+
+      - name: Configure s3cmd
+        run: |
+          cat > ~/.s3cfg <<EOF
+          [default]
+          access_key = ${{ secrets.S3_ACCESS_KEY }}
+          secret_key = ${{ secrets.S3_SECRET_KEY }}
+          bucket_location = us-east-1
+          host_base = ${{ secrets.S3_ENDPOINT_URL }}
+          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
+          use_https = True
+          EOF
+
+      - name: Determine version
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            if [ -f VERSION ]; then
+              version=$(cat VERSION)
+            else
+              exit 1
+            fi
+          else
+            version=${{ github.head_ref }}
+          fi
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: Upload runtimes to S3
+        run: |
+          s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz"
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/latest/INTEL/x86_64/Ubuntu/library.tar.gz"
+          fi
+
+  build-runtimes-for-windows-x86_64:
+    timeout-minutes: 10
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+          lfs: true
+      - name: Install OpenVINO
+        shell: pwsh
+        run: |
+          $ovArchive = "openvino_toolkit_windows_2026.1.0.21367.63e31528c62_x86_64.zip"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/windows/$ovArchive"
+          Invoke-WebRequest -Uri $url -OutFile openvino.zip
+          Expand-Archive -Path openvino.zip -DestinationPath C:\intel -Force
+          Remove-Item openvino.zip
+          $ovDir = (Get-ChildItem -Path C:\intel -Filter "openvino_toolkit_*" | Select-Object -First 1).FullName
+          echo "OPENVINO_DIR=$ovDir\runtime" >> $env:GITHUB_ENV
+      - name: Compile runtime
+        run: |
+          cd runtime-library
+          .\build-runtime.bat
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+            if ("${{ github.ref }}" -eq "refs/heads/main") {
+            if (Test-Path VERSION) {
+              $version = Get-Content VERSION
+            } else {
+              throw "VERSION file missing"
+            }
+            } else {
+            $version = "${{ github.head_ref }}"
+            }
+            echo "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Upload runtimes to Custom S3-Compatible Bucket
+        shell: pwsh
+        run: |
+          $version = $env:version
+          $artifactPath = "runtime-library\artifacts\runtime-library-X86_64-Windows.tar.gz"
+          $targetKey = "runtimes/$version/INTEL/x86_64/Windows/library.tar.gz"
+          $latestTargetKey = "runtimes/latest/INTEL/x86_64/Windows/library.tar.gz"
+
+          $s5cmdUrl = "https://github.com/peak/s5cmd/releases/download/v2.3.0/s5cmd_2.3.0_Windows-64bit.zip"
+          $s5cmdZip = "$env:USERPROFILE\s5cmd.zip"
+          $s5cmdPath = "$env:USERPROFILE\s5cmd"
+          Invoke-WebRequest -Uri $s5cmdUrl -OutFile $s5cmdZip
+          Expand-Archive -Path $s5cmdZip -DestinationPath $s5cmdPath -Force
+          Remove-Item -Path $s5cmdZip
+
+          $env:PATH += ";$s5cmdPath"
+          [Environment]::SetEnvironmentVariable("PATH", $env:PATH, [EnvironmentVariableTarget]::User)
+
+          if (-Not (Test-Path $artifactPath)) {
+            throw "Artifact not found: $artifactPath"
+          }
+
+          Write-Host "Uploading $artifactPath to s3://oaax/$targetKey"
+          $env:AWS_ACCESS_KEY_ID = "${{ secrets.S3_ACCESS_KEY }}"
+          $env:AWS_SECRET_ACCESS_KEY = "${{ secrets.S3_SECRET_KEY }}"
+          s5cmd --endpoint-url "https://${{ secrets.S3_ENDPOINT_URL }}" cp "$artifactPath" "s3://oaax/$targetKey"
+          if ("${{ github.ref }}" -eq "refs/heads/main") {
+            s5cmd --endpoint-url "https://${{ secrets.S3_ENDPOINT_URL }}" cp "$artifactPath" "s3://oaax/$latestTargetKey"
+          }
+
+  integration-tests:
+    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    needs: [build-toolchain, build-runtimes-for-ubuntu]
+    permissions:
+      actions: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+          lfs: true
+
+      - name: Set up environment
+        run: |
+          sudo bash scripts/setup-env.sh
+          echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
+          echo "CMAKE_BIN=/usr/local/bin/cmake" >> "$GITHUB_ENV"
+
+      - name: Determine version
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            version=$(cat VERSION)
+          else
+            version=${{ github.head_ref }}
+          fi
+          echo "version=$version" >> $GITHUB_ENV
+
+      - name: Download runtime library
+        run: |
+          mkdir -p runtime-library/build
+          wget -q "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" -O /tmp/library.tar.gz
+          tar xzf /tmp/library.tar.gz -C runtime-library/build/
+
+      - name: Load toolchain Docker image
+        run: |
+          wget -q "https://oaax.nbg1.your-objectstorage.com/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar" -O /tmp/toolchain.tar
+          docker load -i /tmp/toolchain.tar
+          rm /tmp/toolchain.tar
+
+      - name: Set up Python environment
+        run: uv sync --extra integration --extra quantization -q
+
+      - name: Stage 1 — convert models and run toolchain tests
+        run: uv run python tests/stage1.py
+
+      - name: Upload compiled models
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-models
+          path: tests/compiled_models/
+          retention-days: 1
+
+      - name: Stage 2 — build test binaries and run tests
+        run: uv run python tests/stage2.py --duration 5
+
+      - name: Upload runtime log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-log-linux
+          path: runtime-library/build/runtime.log
+          if-no-files-found: warn
+
+  integration-tests-windows:
+    timeout-minutes: 30
+    runs-on: windows-latest
+    needs: [build-runtimes-for-windows-x86_64, integration-tests]
+    permissions:
+      actions: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: 'recursive'
+
+      - name: Install OpenVINO
+        shell: pwsh
+        run: |
+          $ovArchive = "openvino_toolkit_windows_2026.1.0.21367.63e31528c62_x86_64.zip"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/windows/$ovArchive"
+          Invoke-WebRequest -Uri $url -OutFile openvino.zip
+          Expand-Archive -Path openvino.zip -DestinationPath C:\intel -Force
+          Remove-Item openvino.zip
+          $ovDir = (Get-ChildItem -Path C:\intel -Filter "openvino_toolkit_*" | Select-Object -First 1).FullName
+          echo "OPENVINO_DIR=$ovDir\runtime" >> $env:GITHUB_ENV
+
+      - name: Determine version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -eq "refs/heads/main") {
+            $version = Get-Content VERSION
+          } else {
+            $version = "${{ github.head_ref }}"
+          }
+          echo "version=$version" >> $env:GITHUB_ENV
+
+      - name: Download Windows runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path runtime-library\build\Release | Out-Null
+          Invoke-WebRequest -Uri "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Windows/library.tar.gz" -OutFile library.tar.gz
+          tar xzf library.tar.gz -C runtime-library\build\Release\
+          Remove-Item library.tar.gz
+
+      - name: Download compiled models
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-models
+          path: tests/compiled_models
+
+      - name: Stage 2 — run runtime tests
+        run: python tests/stage2.py
+
+      - name: Upload runtime log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-log-windows
+          path: runtime-library/build/Release/runtime.log
+          if-no-files-found: warn
