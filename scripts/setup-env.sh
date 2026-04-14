@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 # Install ubuntu packages
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y wget curl build-essential execstack patchelf python3-pip s3cmd zlib1g-dev
+apt-get install -y wget curl build-essential execstack patchelf python3-pip s3cmd
 
 # Install uv (Python package manager used by the test suite)
 pip3 install uv

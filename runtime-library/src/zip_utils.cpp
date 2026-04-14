@@ -8,20 +8,7 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-// clang-format off
-// windows.h must be included before compressapi.h — it defines core Windows types
-// (WINAPI, HANDLE, SIZE_T, etc.) that compressapi.h depends on.  Alphabetic
-// include ordering would place compressapi.h first and trigger winnt.h's
-// "No Target Architecture" error inside the MSVC build.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <compressapi.h>
-// clang-format on
-#pragma comment(lib, "Cabinet.lib")
-#else
-#include <zlib.h>
-#endif
+#include "miniz.h"
 
 // ---------------------------------------------------------------------------
 // Little-endian reads from a raw byte buffer
@@ -64,76 +51,53 @@ static bool find_eocd(FILE *f, uint32_t &cd_offset, uint16_t &cd_count) {
 }
 
 // ---------------------------------------------------------------------------
-// Platform-specific DEFLATE decompression (zip compression method 8)
+// DEFLATE decompression (zip compression method 8) via vendored miniz
 // ---------------------------------------------------------------------------
 
-#ifdef _WIN32
-
-// Uses the Windows Compression API (Cabinet.dll, available since Windows 8).
-// COMPRESS_ALGORITHM_DEFLATE is raw RFC 1951 DEFLATE — exactly what zip uses.
-static bool inflate_entry(FILE *in, uint32_t comp_size, uint32_t uncomp_size,
-                          FILE *out) {
-  std::vector<uint8_t> compressed(comp_size);
-  if (fread(compressed.data(), 1, comp_size, in) != comp_size) return false;
-
-  DECOMPRESSOR_HANDLE handle = nullptr;
-  if (!CreateDecompressor(COMPRESS_ALGORITHM_DEFLATE, nullptr, &handle))
-    return false;
-
-  std::vector<uint8_t> decompressed(uncomp_size);
-  SIZE_T actual = uncomp_size;
-  BOOL ok = Decompress(handle, compressed.data(), (SIZE_T)comp_size,
-                       decompressed.data(), (SIZE_T)uncomp_size, &actual);
-  CloseDecompressor(handle);
-
-  if (!ok) return false;
-  return fwrite(decompressed.data(), 1, actual, out) == actual;
-}
-
-#else
-
-// Uses zlib inflate with windowBits=-15 (raw deflate, no zlib header/trailer).
+// Uses miniz inflate with windowBits=-15 (raw deflate, no zlib header/trailer).
+// miniz is a cross-platform DEFLATE implementation with a zlib-compatible API,
+// so this code compiles on Linux, Windows, and macOS with zero system
+// dependencies.
 static bool inflate_entry(FILE *in, uint32_t comp_size,
                           uint32_t /*uncomp_size*/, FILE *out) {
   const size_t CHUNK = 65536;
   std::vector<uint8_t> in_buf(CHUNK), out_buf(CHUNK);
 
-  z_stream strm{};
-  if (inflateInit2(&strm, -15) != Z_OK) return false;
+  mz_stream strm{};
+  if (mz_inflateInit2(&strm, -MZ_DEFAULT_WINDOW_BITS) != MZ_OK) return false;
 
   uint32_t remaining = comp_size;
-  int ret = Z_OK;
+  int ret = MZ_OK;
 
-  while (remaining > 0 && ret != Z_STREAM_END) {
+  while (remaining > 0 && ret != MZ_STREAM_END) {
     size_t to_read = std::min((size_t)remaining, CHUNK);
     size_t nread = fread(in_buf.data(), 1, to_read, in);
     if (nread == 0) break;
     remaining -= (uint32_t)nread;
 
     strm.next_in = in_buf.data();
-    strm.avail_in = (uInt)nread;
+    strm.avail_in = (mz_uint32)nread;
 
     do {
       strm.next_out = out_buf.data();
-      strm.avail_out = (uInt)CHUNK;
-      ret = inflate(&strm, Z_NO_FLUSH);
-      if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR) {
-        inflateEnd(&strm);
+      strm.avail_out = (mz_uint32)CHUNK;
+      ret = mz_inflate(&strm, MZ_NO_FLUSH);
+      if (ret == MZ_STREAM_ERROR || ret == MZ_DATA_ERROR ||
+          ret == MZ_MEM_ERROR) {
+        mz_inflateEnd(&strm);
         return false;
       }
       size_t produced = CHUNK - strm.avail_out;
       if (fwrite(out_buf.data(), 1, produced, out) != produced) {
-        inflateEnd(&strm);
+        mz_inflateEnd(&strm);
         return false;
       }
     } while (strm.avail_out == 0);
   }
 
-  inflateEnd(&strm);
-  return ret == Z_STREAM_END;
+  mz_inflateEnd(&strm);
+  return ret == MZ_STREAM_END;
 }
-
-#endif  // _WIN32
 
 // ---------------------------------------------------------------------------
 // STORE entry (compression method 0 — verbatim copy)

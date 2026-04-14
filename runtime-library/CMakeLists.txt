@@ -15,7 +15,7 @@ set(SPDLOG_DIR ${DEPS_DIR}/spdlog)
 set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
 set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
 set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
-set(ZLIB_INCLUDE_DIR ${DEPS_DIR}/zlib)
+set(MINIZ_DIR ${DEPS_DIR}/miniz)
 
 # === OpenVINO Configuration ===
 # Default assumes the archive installation extracted to /opt/intel/openvino,
@@ -71,10 +71,8 @@ if(PLATFORM STREQUAL "X86_64")
 elseif(PLATFORM STREQUAL "WINDOWS")
   set(CMAKE_SYSTEM_PROCESSOR x86_64)
   set(CMAKE_SYSTEM_NAME Windows)
-  # _WIN32_WINNT=0x0A00 targets Windows 10+, which enables the Compression API
-  # (compressapi.h COMPRESS_ALGORITHM_DEFLATE) used by zip_utils.cpp.
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W3 /MD /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX /D_WIN32_WINNT=0x0A00")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /MD /EHsc /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX /D_WIN32_WINNT=0x0A00")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W3 /MD /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /MD /EHsc /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX")
 else()
   message(FATAL_ERROR "Please specify the target platform: X86_64, or WINDOWS. Found ${PLATFORM}")
 endif()
@@ -140,6 +138,7 @@ file(GLOB_RECURSE SRC
   ${SRC_DIR}/runtime_utils.cpp
   ${SRC_DIR}/runtime_core.cpp
   ${SRC_DIR}/zip_utils.cpp
+  ${MINIZ_DIR}/miniz.c
 )
 
 # === Library Target ===
@@ -191,7 +190,7 @@ target_include_directories(RuntimeLibrary PUBLIC
 )
 target_include_directories(RuntimeLibrary PRIVATE
   ${SRC_DIR}
-  ${ZLIB_INCLUDE_DIR}
+  ${MINIZ_DIR}
 )
 
 # === Link Directories ===
@@ -216,11 +215,6 @@ if(MSVC)
     openvino
     ws2_32 bcrypt
   )
-  # Cabinet.dll provides the Windows Compression API used by zip_utils.cpp.
-  # #pragma comment(lib, "Cabinet.lib") in the source handles MSVC auto-link;
-  # the explicit target_link_libraries below covers non-MSVC Windows toolchains.
-  target_link_libraries(RuntimeLibrary PRIVATE Cabinet)
-
   # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
   # alongside RuntimeLibrary.dll. Uses cmake -P to glob at BUILD time so the
   # DLLs don't need to exist yet when cmake configures.
@@ -243,13 +237,6 @@ else()
     pthread dl c_utilities stdc++
     -Wl,--end-group
   )
-  # zlib is required for zip extraction.  Link PRIVATELY so the DT_NEEDED entry
-  # is recorded in libRuntimeLibrary.so but not propagated to consumers (which
-  # don't call zlib directly).  The link stub lives in the host's lib dir; at
-  # runtime the target Ubuntu system provides libz.so.1.
-  target_link_directories(RuntimeLibrary PRIVATE /usr/lib/x86_64-linux-gnu)
-  target_link_libraries(RuntimeLibrary PRIVATE z)
-
   # Copy only the OpenVINO libs needed at runtime: core, device plugins,
   # IR frontend, and threading libs. Unused model-format frontends are excluded
   # to keep the package lean — the runtime only loads OpenVINO IR (.xml) files.
