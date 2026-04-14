@@ -9,9 +9,15 @@
 #include <vector>
 
 #ifdef _WIN32
+// clang-format off
+// windows.h must be included before compressapi.h — it defines core Windows types
+// (WINAPI, HANDLE, SIZE_T, etc.) that compressapi.h depends on.  Alphabetic
+// include ordering would place compressapi.h first and trigger winnt.h's
+// "No Target Architecture" error inside the MSVC build.
 #define WIN32_LEAN_AND_MEAN
-#include <compressapi.h>
 #include <windows.h>
+#include <compressapi.h>
+// clang-format on
 #pragma comment(lib, "Cabinet.lib")
 #else
 #include <zlib.h>
