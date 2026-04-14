@@ -68,22 +68,33 @@ pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
 
 ## Benchmark results (Intel Core i7-12700K, hint=throughput)
 
-| Tool | Model | Precision | Device | Throughput |
-|------|-------|-----------|--------|------------|
-| benchmark_app | yolo11n | FP32 | CPU | ~100 FPS |
-| benchmark_app | yolo11n | FP16 | CPU | ~97 FPS |
-| benchmark_app | yolo11n | INT8 | CPU | **~245 FPS** |
-| yolo_test (OAAX) | yolo11n | FP32 | CPU | ~96 FPS |
-| yolo_test (OAAX) | yolo11n | FP16 | CPU | ~97 FPS |
-| yolo_test (OAAX) | yolo11n | INT8 | CPU | ~236 FPS |
-| benchmark_app | yolo11n | FP32 | GPU | ~82 FPS |
-| benchmark_app | yolo11n | INT8 | GPU | ~113 FPS |
-| yolo_test (OAAX) | yolo11n | FP32 | GPU | ~75 FPS |
-| yolo_test (OAAX) | yolo11n | INT8 | GPU | ~101 FPS |
+### CPU benchmarks (`benchmark_app`, batch=1)
 
-The OAAX runtime matches `benchmark_app` within ~4% on CPU across all precisions.
-The GPU gap (~9–13%) is driven by dispatch overhead through the C API boundary becoming
-significant at higher GPU throughput; on CPU this cost is negligible relative to inference time.
+| Model | Precision | Throughput |
+|-------|-----------|------------|
+| yolo11n | FP32 | ~96 FPS |
+| yolo11n | FP16 | ~94 FPS |
+| yolo11n | INT8 | **~229 FPS** |
+| yolov8n | FP32 | ~81 FPS |
+| yolov8n | FP16 | ~80 FPS |
+| yolo11s | FP32 | ~32 FPS |
+| yolo11s | FP16 | ~32 FPS |
+
+> FP32 and FP16 are identical on this CPU — the i7-12700K has no native FP16 ALU;
+> OpenVINO computes FP16 models as FP32 internally. Only INT8 benefits from AVX2/VNNI (~2.5×).
+
+### GPU benchmarks (iGPU UHD 770 + dGPU RTX A4000, `yolo_test` OAAX runtime)
+
+| Model | Precision | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU (MULTI) |
+|-------|-----------|--------------|--------------|-------------|
+| yolov8n | FP32 | ~72 FPS | ~55 FPS | **~117 FPS** |
+| yolov8n | INT8 | ~101 FPS | ~60 FPS | **~152 FPS** |
+| yolo11n | FP32 | ~75 FPS | ~67 FPS | **~130 FPS** |
+| yolo11n | INT8 | ~103 FPS | ~71 FPS | **~156 FPS** |
+
+The OAAX runtime matches `benchmark_app` within ~4% on CPU. The GPU throughput gap vs
+`benchmark_app` (~9–13%) comes from H2D/D2H memory transfers through the C API boundary;
+use the `MULTI` device with `perf_hint=cumulative_throughput` for best aggregate GPU FPS.
 
 ## Contributing
 

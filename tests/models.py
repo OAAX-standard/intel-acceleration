@@ -53,6 +53,14 @@ TEST_MODELS = {
         "output_channels": 84,
         "output_anchors": 8400,
     },
+    "yolo11s": {
+        "filename": "yolo11s.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 640, 640],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 8400,
+    },
 }
 
 
@@ -82,7 +90,7 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
         return str(dest)
 
     # Map our model names to ultralytics model IDs
-    ultralytics_name = {"yolov8n": "yolov8n.pt", "yolo11n": "yolo11n.pt"}[model_name]
+    ultralytics_name = {"yolov8n": "yolov8n.pt", "yolo11n": "yolo11n.pt", "yolo11s": "yolo11s.pt"}[model_name]
 
     print(f"Exporting {model_name} to ONNX via ultralytics...")
     model = YOLO(ultralytics_name)
@@ -119,7 +127,7 @@ def download_model(model_name: str, output_dir: str = "test_models") -> str:
         return str(model_path)
 
     # YOLO models: export via ultralytics
-    if model_name in ("yolov8n", "yolo11n"):
+    if model_name in ("yolov8n", "yolo11n", "yolo11s"):
         return export_yolo_model(model_name, output_dir)
 
     # Classification models: download from ONNX Model Zoo

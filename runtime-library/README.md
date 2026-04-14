@@ -56,8 +56,8 @@ char *keys[]   = {"device_type", "perf_hint"};
 void *values[] = {"CPU", "throughput"};
 runtime_initialization_with_args(2, keys, values);
 
-// 2. Load model (.xml file — .bin must be in the same directory)
-runtime_model_loading("/path/to/model.xml");
+// 2. Load model (.zip bundle from the toolchain, or bare .xml with .bin alongside)
+runtime_model_loading("/path/to/model.zip");
 
 // 3. Send input (runtime takes ownership; do not free after this call)
 send_input(input_tensors);
@@ -87,6 +87,7 @@ All parameters are passed as strings to `runtime_initialization_with_args`.
 |-----|---------|--------|-------------|
 | `device_type` | `"CPU"` | `"CPU"` `"GPU"` `"NPU"` | Target inference device |
 | `perf_hint` | `"latency"` | `"latency"` `"throughput"` `"cumulative_throughput"` | OpenVINO performance mode |
+| `cache_dir` | `"."` (CWD) | any path or `""` | Directory for OpenVINO compiled-model cache. Eliminates recompilation on restart (~400 ms → ~47 ms). Set to `""` to disable. |
 | `log_level` | `"2"` (info) | `"0"`–`"6"` | spdlog level: 0=trace, 2=info, 4=warn, 6=off |
 | `log_file` | `"runtime.log"` | any path | Log output file |
 
@@ -137,9 +138,14 @@ export LD_LIBRARY_PATH=/path/to/artifacts/X86_64:$LD_LIBRARY_PATH
 ```
 
 **Model loading fails**
-Ensure you pass the `.xml` path (not `.bin`) and both files are in the same directory:
+Pass either a `.zip` bundle (output from the toolchain) or a bare `.xml` path with the `.bin` file in the same directory:
 ```bash
-ls model.xml model.bin   # both must exist
+# Preferred — toolchain output bundle
+runtime_model_loading("/path/to/model.zip");
+
+# Also accepted — bare IR files
+runtime_model_loading("/path/to/model.xml");
+ls model.xml model.bin   # .bin must be alongside .xml
 ```
 
 ## Project structure
@@ -148,7 +154,9 @@ ls model.xml model.bin   # both must exist
 runtime-library/
 ├── src/
 │   ├── runtime_core.cpp    # inference pipeline (OpenVINO native API)
-│   └── runtime_utils.cpp   # OAAX ↔ OpenVINO type mapping
+│   ├── runtime_utils.cpp   # OAAX ↔ OpenVINO type mapping
+│   ├── zip_utils.cpp       # ZIP extraction for .zip model bundles
+│   └── zip_utils.hpp
 ├── include/
 │   ├── runtime_core.hpp    # public C API (OAAX interface)
 │   └── tensors_struct.h    # OAAX tensor structure and helpers

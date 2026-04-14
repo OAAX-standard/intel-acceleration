@@ -26,6 +26,11 @@ COMPILED_DIR = ROOT / "tests" / "compiled_models"
 BUILD_DIR = ROOT / "runtime-library" / "build"
 IS_WINDOWS = platform.system() == "Windows"
 
+# Match the models compiled by stage1 / test_yolo_integration.py.
+# Models outside this list (e.g. yolo11s left from earlier experiments) are
+# intentionally skipped — they are not part of the CI test matrix.
+YOLO_MODELS = {"yolov8n", "yolo11n", "yolo11s"}
+
 
 def header(title: str) -> None:
     print(f"\n\033[34m=== {title} ===\033[0m")
@@ -118,9 +123,10 @@ def build_yolo_test() -> bool:
 
 def get_compiled_models() -> list[tuple[Path, str, str]]:
     return [
-        (xml, xml.stem, xml.parent.name)
+        (zip_path, zip_path.stem, zip_path.parent.name)
         for variant in ("FP32", "FP16", "INT8")
-        for xml in sorted(COMPILED_DIR.glob(f"*/{variant}/*.xml"))
+        for zip_path in sorted(COMPILED_DIR.glob(f"*/{variant}/*.zip"))
+        if zip_path.stem in YOLO_MODELS
     ]
 
 
@@ -180,7 +186,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
     )
 
 
-def run_yolo_test(xml: Path, device: str, warmup: int, runs: int) -> tuple | None:
+def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
         print(f"  [error] yolo_test binary not found: {binary}")
@@ -189,10 +195,11 @@ def run_yolo_test(xml: Path, device: str, warmup: int, runs: int) -> tuple | Non
     if not IS_WINDOWS:
         env["LD_LIBRARY_PATH"] = f"{BUILD_DIR}:{env.get('LD_LIBRARY_PATH', '')}"
     text = run_process(
-        [str(binary), str(xml), device, "--warmup", str(warmup), "--runs", str(runs), "--perf-hint", "throughput"],
+        [str(binary), str(zip_path), device, "--warmup", str(warmup), "--runs", str(runs), "--perf-hint", "throughput"],
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
         env=env,
-        timeout=runs * 2,
+        # 600s overhead covers cold model compilation (e.g. yolo11s ~3 min uncached).
+        timeout=600 + runs * 2,
     )
     if not text or "=== Results ===" not in text:
         if text:
@@ -277,7 +284,9 @@ def main() -> None:
         if bench:
             header(f"Step 1: benchmark_app  (hint=throughput, {args.duration}s per run)")
             print_table_header()
-            for xml, model, variant in models:
+            for zip_path, model, variant in models:
+                # benchmark_app reads the extracted IR (.xml), not the archive.
+                xml = zip_path.with_suffix(".xml")
                 for device in devices:
                     r = run_benchmark_app(xml, device, args.duration)
                     if r:
@@ -302,9 +311,9 @@ def main() -> None:
 
         print_table_header()
         pass_count = fail_count = 0
-        for xml, model, variant in models:
+        for zip_path, model, variant in models:
             for device in devices:
-                r = run_yolo_test(xml, device, args.warmup, args.runs)
+                r = run_yolo_test(zip_path, device, args.warmup, args.runs)
                 if r:
                     print(_ROW.format(model, variant, device, *r))
                     write_csv_row(csv_writer, "yolo_test", model, variant, device, r)

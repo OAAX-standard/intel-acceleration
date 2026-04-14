@@ -1,8 +1,8 @@
 # Intel Acceleration Project Status
 
 **Project:** OAAX Implementation for Intel Hardware
-**Version:** 1.1.1
-**Last Updated:** 2026-03-19
+**Version:** 1.3.0
+**Last Updated:** 2026-04-14
 
 ---
 
@@ -149,6 +149,10 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ Multi-GPU auto-detection: when `device_type="GPU"` and multiple GPUs present, automatically constructs `MULTI:GPU.0,GPU.1,...` string; use `perf_hint=cumulative_throughput` for best aggregate FPS
 - ✅ Batch-size throughput sweep (`tests/benchmark_batch_sweep.py`): exports YOLO .pt → ONNX with explicit batch, converts to IR, benchmarks yolo_test + benchmark_app across batches 1/2/4/8; results cached in `tests/compiled_models/_batch_sweep/`
 - ✅ stage2.py regex fix: updated parse patterns to match `Avg latency:` / `Min latency:` / `p95 latency:` output labels from yolo_test
+- ✅ ZIP model loading: `runtime_model_loading()` now accepts `.zip` bundles (OAAX toolchain output) in addition to bare `.xml` paths
+- ✅ OpenVINO compiled-model cache (`ov::cache_dir`): on by default (CWD), disable with `cache_dir=""`. Compilation start/end logged at INFO.
+- ✅ yolo11s added to test matrix: conftest.py, stage2.py, test_yolo_integration.py, models.py; all 9 stage2 tests passing
+- ✅ stage2.py timeout fix: `run_yolo_test()` timeout changed to `600 + runs * 2` (was `runs * 2`)
 
 **Goals:**
 1. **Comprehensive Testing**
@@ -167,7 +171,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
    - ✅ Single callback registration per slot (no per-inference std::function alloc)
    - ✅ Multi-GPU auto-detection (MULTI plugin, `cumulative_throughput` hint)
    - ✅ Debug-only profiler (`OAAX_PROFILE=1`); zero overhead in Release
-   - ☐ Model caching across `runtime_model_loading` calls
+   - ✅ Model caching across process restarts via `ov::cache_dir` (default=CWD; disable with `cache_dir=""`)
 
 4. **Packaging**
    - ✅ Linux artifact complete (libRuntimeLibrary.so + OpenVINO .so + TBB, $ORIGIN RPATH)
@@ -483,6 +487,18 @@ Note: `benchmark_app -d GPU` does NOT use MULTI — routes to fastest single GPU
 - **Impact:** No API change required — callers set `device_type="GPU"` as before; with `perf_hint=cumulative_throughput` they get full multi-GPU benefit automatically
 - **Constraint:** `latency` hint with MULTI routes to the fastest single device (no multi-GPU benefit); use `cumulative_throughput` for throughput-oriented workloads
 - **Status:** Implemented, benchmarked
+
+**2026-04-14: OpenVINO model cache via ov::cache_dir (v1.3.0)**
+- **Decision:** Enable `ov::cache_dir` by default, storing `.blob` files in the process's CWD. Disable with `cache_dir=""`
+- **Rationale:** First-time compilation of large models (yolo11s on GPU) takes ~3 min. Cached loads take ~47 ms. No downside for fresh CWD environments (CI); huge benefit for repeated runs (production).
+- **Impact:** `cache_dir` added to `runtime_initialization_with_args` key table; log lines added around `compile_model()` calls for observability
+- **Status:** Implemented, tested (`.blob` files verified in CWD)
+
+**2026-04-13: ZIP model loading in runtime (v1.2.1)**
+- **Decision:** `runtime_model_loading()` extracts `.zip` bundles to a temp dir and loads `model.xml` from there; `.xml` paths still accepted
+- **Rationale:** Toolchain produces `.zip` output; callers should not need to unzip before passing to the runtime. Aligns with OAAX spec.
+- **Impact:** Added `zip_utils.cpp` / `zip_utils.hpp`; no API change
+- **Status:** Implemented
 
 **2026-04-11: Use cmake -P script for Windows DLL copy, not file(GLOB) at configure time**
 - **Decision:** Copy OpenVINO DLLs via `cmake -P copy_windows_dlls.cmake` invoked from `add_custom_command POST_BUILD`

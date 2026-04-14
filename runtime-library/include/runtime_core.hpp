@@ -40,7 +40,10 @@
  * `"NPU"`         | | `perf_hint`   | string | `"latency"`    | `"latency"`,
  * `"throughput"`, `"cumulative_throughput"` | | `log_level`   | int    | `2`
  * (info)     | spdlog level: 0=trace … 6=off                            | |
- * `log_file`    | string | `"runtime.log"`| Path to the log file |
+ * `log_file`    | string | `"runtime.log"`| Path to the log file              |
+ * | `cache_dir`   | string | `"."`          | Directory for OpenVINO
+ * compiled-model cache. Avoids recompilation across process restarts. Set to
+ * `""` to disable.      |
  *
  * @param length  Number of key-value pairs.
  * @param keys    Array of null-terminated key strings.
@@ -64,8 +67,11 @@ extern "C" EXPOSE_FUNCTION int runtime_initialization();
 /**
  * @brief Load and compile an OpenVINO IR model.
  *
- * Reads the `.xml` file at @p model_path; the corresponding `.bin` weights file
- * must reside in the same directory with the same base name.
+ * @p model_path must point to a `.zip` archive as produced by the OAAX
+ * conversion toolchain.  The archive must contain a `.xml` and a co-located
+ * `.bin` file at its root.  The runtime extracts the archive to a temporary
+ * directory automatically; that directory is removed on the next call to
+ * runtime_model_loading() or runtime_destruction().
  *
  * Calling this function on a runtime that already has a model loaded will
  * stop the current inference pipeline, release all resources, and start fresh.
@@ -76,7 +82,7 @@ extern "C" EXPOSE_FUNCTION int runtime_initialization();
  * - The optimal number of InferRequests is inferred from the compiled model
  *   according to the configured perf_hint.
  *
- * @param model_path  Absolute or relative path to the `.xml` IR file.
+ * @param model_path  Path to the toolchain-produced `.zip` archive.
  * @return 0 on success, -1 on failure (check log file for details).
  */
 extern "C" EXPOSE_FUNCTION int runtime_model_loading(const char *model_path);

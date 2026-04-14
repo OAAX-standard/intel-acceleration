@@ -15,6 +15,7 @@ set(SPDLOG_DIR ${DEPS_DIR}/spdlog)
 set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
 set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
 set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
+set(ZLIB_INCLUDE_DIR ${DEPS_DIR}/zlib)
 
 # === OpenVINO Configuration ===
 # Default assumes the archive installation extracted to /opt/intel/openvino,
@@ -136,6 +137,7 @@ add_subdirectory(${TOOLS_C_UTILITIES_DIR} ${CMAKE_CURRENT_BINARY_DIR}/c_utilitie
 file(GLOB_RECURSE SRC
   ${SRC_DIR}/runtime_utils.cpp
   ${SRC_DIR}/runtime_core.cpp
+  ${SRC_DIR}/zip_utils.cpp
 )
 
 # === Library Target ===
@@ -185,6 +187,10 @@ target_include_directories(RuntimeLibrary PUBLIC
   ${CONCURRENT_QUEUE_DIR}
   ${OPENVINO_INCLUDE_DIR}
 )
+target_include_directories(RuntimeLibrary PRIVATE
+  ${SRC_DIR}
+  ${ZLIB_INCLUDE_DIR}
+)
 
 # === Link Directories ===
 # OPENVINO_LINK_DIR can point to a directory of unversioned symlinks when the
@@ -208,6 +214,10 @@ if(MSVC)
     openvino
     ws2_32 bcrypt
   )
+  # Cabinet.dll provides the Windows Compression API used by zip_utils.cpp.
+  # #pragma comment(lib, "Cabinet.lib") in the source handles MSVC auto-link;
+  # the explicit target_link_libraries below covers non-MSVC Windows toolchains.
+  target_link_libraries(RuntimeLibrary PRIVATE Cabinet)
 
   # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
   # alongside RuntimeLibrary.dll. Uses cmake -P to glob at BUILD time so the
@@ -231,6 +241,12 @@ else()
     pthread dl c_utilities stdc++
     -Wl,--end-group
   )
+  # zlib is required for zip extraction.  Link PRIVATELY so the DT_NEEDED entry
+  # is recorded in libRuntimeLibrary.so but not propagated to consumers (which
+  # don't call zlib directly).  The link stub lives in the host's lib dir; at
+  # runtime the target Ubuntu system provides libz.so.1.
+  target_link_directories(RuntimeLibrary PRIVATE /usr/lib/x86_64-linux-gnu)
+  target_link_libraries(RuntimeLibrary PRIVATE z)
 
   # Copy only the OpenVINO libs needed at runtime: core, device plugins,
   # IR frontend, and threading libs. Unused model-format frontends are excluded
@@ -254,7 +270,7 @@ endif()
 # === Test Executables ===
 set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
 
-foreach(TEST_NAME simple_test yolo_test)
+foreach(TEST_NAME simple_test yolo_test nms_model_test)
   add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
   target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
   target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})

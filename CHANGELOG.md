@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.0] - 2026-04-14
+
+### Runtime Library
+
+- **OpenVINO compiled-model cache (`cache_dir`):** the runtime now calls
+  `ov::cache_dir` so OpenVINO serialises compiled `.blob` files to disk after
+  the first load. Subsequent loads skip compilation entirely (~400 ms → ~47 ms
+  cold-start savings on a 5 MB YOLO INT8 model). Cache is **on by default**
+  (stored in the process's working directory). Pass `cache_dir=""` to disable.
+- **Compilation progress logs:** `"Compiling model for device '...' (hint=...)"` and
+  `"Model compilation complete."` are now logged at INFO level so long-running
+  first-time compilation (e.g. ~3 min for yolo11s on GPU) is clearly visible.
+
+### Testing
+
+- **yolo11s added to the test matrix:** `conftest.py`, `stage2.py`,
+  `test_yolo_integration.py`, and `models.py` all include yolo11s; stage1 + stage2
+  now cover all three YOLO variants (yolov8n, yolo11n, yolo11s) × (FP32/FP16/INT8).
+- **Fixed stage2 timeout for large models:** `run_yolo_test()` timeout was
+  `runs * 2` seconds — insufficient for cold compilation of yolo11s. Changed to
+  `600 + runs * 2` (600 s overhead covers first-time GPU compilation).
+
+---
+
+## [1.2.1] - 2026-04-13
+
+### Runtime Library
+
+- **ZIP model loading:** `runtime_model_loading` now accepts both `.zip` archives
+  (OAAX bundle) and bare `.xml` paths. When a `.zip` is passed the runtime extracts
+  `model.xml` and `model.bin` to a temporary directory and loads from there.
+  This aligns the runtime with the OAAX spec and the toolchain output format.
+
+---
+
 ## [1.2.0] - 2026-04-12
 
 ### CI / Testing
