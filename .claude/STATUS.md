@@ -1,8 +1,8 @@
 # Intel Acceleration Project Status
 
 **Project:** OAAX Implementation for Intel Hardware
-**Version:** 1.3.0
-**Last Updated:** 2026-04-14
+**Version:** 1.3.1
+**Last Updated:** 2026-04-15
 
 ---
 
@@ -16,7 +16,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Current Status
 
-**Last Updated:** 2026-04-11 (runtime hot-path optimizations complete)
+**Last Updated:** 2026-04-15 (v1.3.1 interface compliance patch)
 
 ### ✅ Completed Phases
 
@@ -153,6 +153,10 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ OpenVINO compiled-model cache (`ov::cache_dir`): on by default (CWD), disable with `cache_dir=""`. Compilation start/end logged at INFO.
 - ✅ yolo11s added to test matrix: conftest.py, stage2.py, test_yolo_integration.py, models.py; all 9 stage2 tests passing
 - ✅ stage2.py timeout fix: `run_yolo_test()` timeout changed to `600 + runs * 2` (was `runs * 2`)
+- ✅ v1.3.1: Fixed `tensors_struct` field order to match OAAX standard interface (critical crash fix)
+- ✅ v1.3.1: `tensor_data_type` enum aligned to OAAX standard values; removed FLOAT16/BFLOAT16/COMPLEX types
+- ✅ v1.3.1: Logger flush-on-every-message (`flush_on(trace)`); `receive_output` 100ms backpressure sleep
+- ✅ v1.3.1: Removed all debug instrumentation (IIII marker, Breakpoint logs, metadata dumps)
 
 **Goals:**
 1. **Comprehensive Testing**
@@ -487,6 +491,12 @@ Note: `benchmark_app -d GPU` does NOT use MULTI — routes to fastest single GPU
 - **Impact:** No API change required — callers set `device_type="GPU"` as before; with `perf_hint=cumulative_throughput` they get full multi-GPU benefit automatically
 - **Constraint:** `latency` hint with MULTI routes to the fastest single device (no multi-GPU benefit); use `cumulative_throughput` for throughput-oriented workloads
 - **Status:** Implemented, benchmarked
+
+**2026-04-15: Fix tensors_struct field order (v1.3.1)**
+- **Decision:** Align `include/tensors_struct.h` field order with the OAAX standard interface: `names, data_types, ranks, shapes, data`
+- **Rationale:** The runtime header had a different order (`names, ranks, shapes, data_types, data`). Callers build against the OAAX standard header; the runtime read fields at wrong memory offsets, causing immediate crashes on first inference. Both headers are now identical in layout.
+- **Impact:** Breaking ABI change for any caller that was building against the local `include/tensors_struct.h` directly (not the standard header) — but that usage was already broken in practice
+- **Status:** Fixed, all tests passing
 
 **2026-04-14: OpenVINO model cache via ov::cache_dir (v1.3.0)**
 - **Decision:** Enable `ov::cache_dir` by default, storing `.blob` files in the process's CWD. Disable with `cache_dir=""`

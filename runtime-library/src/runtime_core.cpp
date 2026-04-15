@@ -422,6 +422,12 @@ extern "C" int runtime_model_loading(const char* model_path) {
 }
 
 extern "C" int send_input(tensors_struct* input_tensors) {
+  if (!input_tensors) {
+    last_error = "send_input called with null input";
+    logger->error("{}", last_error);
+    return -1;
+  }
+
   if (!compiled_model) {
     last_error =
         "send_input called before a model was loaded — call "
@@ -572,6 +578,7 @@ static void manager_thread_func() {
       for (size_t i = 0; i < input->num_tensors; ++i) {
         failed_tensor = i;
         ov::Shape shape;
+
         for (size_t j = 0; j < input->ranks[i]; ++j)
           shape.push_back(input->shapes[i][j]);
         req.set_tensor(input->names[i],
@@ -601,6 +608,9 @@ static void manager_thread_func() {
     slot_states[idx] = {input, output, from_pool};
 #endif
 
+    logger->debug("[manager] starting inference on slot {} with input {}.", idx,
+                  input->names[0]);
+
     req.start_async();
     PROF_INC(dispatches);
     logger->debug("[manager] start_async fired on slot {}.", idx);
@@ -620,6 +630,7 @@ static void stop_and_join_manager() {
 extern "C" int receive_output(tensors_struct** output_tensors) {
   if (!output_tensors_queue.try_dequeue(*output_tensors)) {
     logger->trace("No output tensors available.");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return -1;
   }
 #ifdef OAAX_PROFILE

@@ -73,8 +73,7 @@ static bool validate_output(const tensors_struct *out, size_t batch) {
     if (out->shapes[0][0] != batch) return false;
     if (out->shapes[0][1] != YOLO_OUT_CH) return false;
     if (out->shapes[0][2] != YOLO_ANCHORS) return false;
-    // Accept FP32 or FP16 output (FP16 models may return FP16 tensors)
-    if (out->data_types[0] != DATA_TYPE_FLOAT && out->data_types[0] != DATA_TYPE_FLOAT16) return false;
+    if (out->data_types[0] != DATA_TYPE_FLOAT) return false;
     return true;
 }
 
