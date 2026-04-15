@@ -10,32 +10,35 @@ extern "C" {
 #endif
 
 // Tensor data types matching OAAX standard
-typedef enum {
-  DATA_TYPE_FLOAT = 0,
-  DATA_TYPE_UINT8 = 1,
-  DATA_TYPE_INT8 = 2,
-  DATA_TYPE_UINT16 = 3,
-  DATA_TYPE_INT16 = 4,
-  DATA_TYPE_INT32 = 5,
-  DATA_TYPE_INT64 = 6,
-  DATA_TYPE_BOOL = 7,
-  DATA_TYPE_DOUBLE = 8,
-  DATA_TYPE_UINT32 = 9,
-  DATA_TYPE_UINT64 = 10,
-  DATA_TYPE_FLOAT16 = 11
+typedef enum tensor_data_type {
+  UNDEFINED = 0,
+  DATA_TYPE_FLOAT = 1,
+  DATA_TYPE_UINT8 = 2,
+  DATA_TYPE_INT8 = 3,
+  DATA_TYPE_UINT16 = 4,
+  DATA_TYPE_INT16 = 5,
+  DATA_TYPE_INT32 = 6,
+  DATA_TYPE_INT64 = 7,
+  DATA_TYPE_STRING = 8,
+  DATA_TYPE_BOOL = 9,
+  DATA_TYPE_DOUBLE = 11,
+  DATA_TYPE_UINT32 = 12,
+  DATA_TYPE_UINT64 = 13,
 } tensor_data_type;
 
-// Struct to hold multiple tensors
-typedef struct {
-  size_t num_tensors;  // Number of tensors
-  char **names;        // Array of tensor names
-  size_t *ranks;       // Array of tensor ranks (number of dimensions)
-  size_t **shapes;  // Array of shape arrays (each shape is an array of sizes)
+// Struct to hold multiple tensors — field order must match the OAAX standard
+// interface (deps/tools/c-utilities/include/tensors_struct.h).
+typedef struct tensors_struct {
+  size_t num_tensors;            // Number of tensors
+  char **names;                  // Array of tensor names
   tensor_data_type *data_types;  // Array of data types
+  size_t *ranks;                 // Array of tensor ranks (number of dimensions)
+  size_t **shapes;               // Array of shape arrays
   void **data;                   // Array of data pointers
 } tensors_struct;
 
-// Get byte size for a given data type
+// Get byte size for a given data type (returns 0 for unsupported/variable
+// types)
 static inline int get_data_type_byte_size(tensor_data_type type) {
   switch (type) {
     case DATA_TYPE_FLOAT:
@@ -60,8 +63,10 @@ static inline int get_data_type_byte_size(tensor_data_type type) {
       return 4;
     case DATA_TYPE_UINT64:
       return 8;
-    case DATA_TYPE_FLOAT16:
-      return 2;
+    case DATA_TYPE_STRING:
+      return 0;  // variable-length
+    case UNDEFINED:
+      return 0;
     default:
       return 0;
   }

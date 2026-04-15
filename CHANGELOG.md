@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.2] - 2026-04-15
+
+### Runtime Library
+
+- **Fixed output buffer pool exhaustion deadlock (critical):** when all pool buffers
+  were held by the caller (e.g. using `deep_free_tensors_struct` instead of
+  `runtime_return_output`), the manager thread would spin forever waiting for a buffer
+  to return to the pool, permanently stalling inference. The pool acquisition path now
+  calls `alloc_pool_buffer()` as a fallback — allocating a fresh same-shape buffer on
+  the rare occasion the pool is empty — so inference continues uninterrupted.
+- **`receive_output` adaptive backoff:** instead of a fixed sleep, the polling interval
+  starts at 1 ms and doubles on each consecutive miss (up to 500 ms cap), then divides
+  by 10 on each successful dequeue. This keeps latency low for fast models (INT8 ~37 ms
+  inference sees ~1–2 ms overhead vs ~43 ms with a fixed 10 ms sleep) while naturally
+  backing off when the pipeline is idle.
+
+---
+
+## [1.3.1] - 2026-04-15
+
+### Runtime Library
+
+- **Fixed `tensors_struct` field order (critical):** `include/tensors_struct.h` had
+  field order `names, ranks, shapes, data_types, data`, which differed from the OAAX
+  standard interface (`names, data_types, ranks, shapes, data`). Callers building
+  against the standard header would write `data_types` at offset 2 while the runtime
+  read offset 2 as `ranks`, causing immediate memory corruption and crashes on the
+  first inference. Both headers are now aligned.
+- **Updated `tensor_data_type` enum:** values aligned to OAAX standard (`UNDEFINED=0`,
+  numeric gap at 10 reserved); removed `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`,
+  `DATA_TYPE_COMPLEX64`, and `DATA_TYPE_COMPLEX128` which are outside the supported set.
+  OpenVINO type mappings updated accordingly.
+- **Logger flush-on-every-message:** spdlog now calls `flush_on(level::trace)` so every
+  log message is flushed immediately, ensuring full log visibility on abnormal exit.
+- **Removed debug instrumentation:** `send_input` and `manager_thread_func` had
+  temporary `"IIII"` marker, seven `"Breakpoint N"` logs, and tensor-metadata dump
+  loops left in from development. All removed.
+- **Hardened `send_input` null check:** null `input_tensors` is now detected before any
+  other operation and sets `last_error` consistently with the rest of the API.
+
+---
+
 ## [1.3.0] - 2026-04-14
 
 ### Runtime Library

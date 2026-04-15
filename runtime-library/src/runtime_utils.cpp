@@ -39,8 +39,8 @@ ov::element::Type map_to_ov_type(tensor_data_type t) {
       return ov::element::u32;
     case DATA_TYPE_UINT64:
       return ov::element::u64;
-    case DATA_TYPE_FLOAT16:
-      return ov::element::f16;
+    case DATA_TYPE_STRING:
+      return ov::element::string;
     default:
       throw std::runtime_error("Unsupported data type!");
   }
@@ -48,32 +48,19 @@ ov::element::Type map_to_ov_type(tensor_data_type t) {
 
 // Map OpenVINO element type to tensor_data_type
 tensor_data_type map_to_tensors_struct_type(ov::element::Type type) {
-  if (type == ov::element::f32)
-    return DATA_TYPE_FLOAT;
-  else if (type == ov::element::u8)
-    return DATA_TYPE_UINT8;
-  else if (type == ov::element::i8)
-    return DATA_TYPE_INT8;
-  else if (type == ov::element::u16)
-    return DATA_TYPE_UINT16;
-  else if (type == ov::element::i16)
-    return DATA_TYPE_INT16;
-  else if (type == ov::element::i32)
-    return DATA_TYPE_INT32;
-  else if (type == ov::element::i64)
-    return DATA_TYPE_INT64;
-  else if (type == ov::element::boolean)
-    return DATA_TYPE_BOOL;
-  else if (type == ov::element::f64)
-    return DATA_TYPE_DOUBLE;
-  else if (type == ov::element::u32)
-    return DATA_TYPE_UINT32;
-  else if (type == ov::element::u64)
-    return DATA_TYPE_UINT64;
-  else if (type == ov::element::f16)
-    return DATA_TYPE_FLOAT16;
-  else
-    throw std::runtime_error("Unsupported OpenVINO element type!");
+  if (type == ov::element::f32) return DATA_TYPE_FLOAT;
+  if (type == ov::element::u8) return DATA_TYPE_UINT8;
+  if (type == ov::element::i8) return DATA_TYPE_INT8;
+  if (type == ov::element::u16) return DATA_TYPE_UINT16;
+  if (type == ov::element::i16) return DATA_TYPE_INT16;
+  if (type == ov::element::i32) return DATA_TYPE_INT32;
+  if (type == ov::element::i64) return DATA_TYPE_INT64;
+  if (type == ov::element::boolean) return DATA_TYPE_BOOL;
+  if (type == ov::element::f64) return DATA_TYPE_DOUBLE;
+  if (type == ov::element::u32) return DATA_TYPE_UINT32;
+  if (type == ov::element::u64) return DATA_TYPE_UINT64;
+  if (type == ov::element::string) return DATA_TYPE_STRING;
+  throw std::runtime_error("Unsupported OpenVINO element type!");
 }
 
 void free_queue(moodycamel::ConcurrentQueue<tensors_struct *> &queue) {
@@ -113,6 +100,9 @@ std::shared_ptr<spdlog::logger> initialize_logger(const string &log_file,
     // Set the logger level to the lowest level among the sinks
     logger->set_level(static_cast<spdlog::level::level_enum>(
         std::min(file_level, console_level)));
+
+    // Flush on every message regardless of level
+    logger->flush_on(spdlog::level::trace);
 
     return logger;  // Return the logger instance
   } catch (const spdlog::spdlog_ex &ex) {

@@ -113,8 +113,8 @@ ts->data[0]       = malloc(1 * 3 * 640 * 640 * sizeof(float));
 deep_free_tensors_struct(ts);
 ```
 
-Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_FLOAT16`, `DATA_TYPE_INT8`,
-`DATA_TYPE_UINT8`, `DATA_TYPE_INT32`, `DATA_TYPE_INT64`, and others — see `tensors_struct.h`.
+Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_INT8`, `DATA_TYPE_UINT8`,
+`DATA_TYPE_INT32`, `DATA_TYPE_INT64`, and others — see `tensors_struct.h`.
 
 ## Troubleshooting
 
