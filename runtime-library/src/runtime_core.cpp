@@ -48,6 +48,7 @@ static void on_inference_complete(int idx, std::exception_ptr ex);
 static void manager_thread_func();
 static void drain_output_pool();
 static void stop_and_join_manager();
+static tensors_struct* alloc_pool_buffer();
 
 // OpenVINO vars
 static std::shared_ptr<ov::Core> core;
@@ -423,11 +424,10 @@ extern "C" int runtime_model_loading(const char* model_path) {
 
 extern "C" int send_input(tensors_struct* input_tensors) {
   if (!input_tensors) {
-    last_error = "send_input called with null input";
+    last_error = "send_input called with null tensors";
     logger->error("{}", last_error);
     return -1;
   }
-
   if (!compiled_model) {
     last_error =
         "send_input called before a model was loaded — call "
@@ -435,15 +435,34 @@ extern "C" int send_input(tensors_struct* input_tensors) {
     logger->error("{}", last_error);
     return -1;
   }
-  logger->debug("Enqueuing input tensors.");
   if (!input_tensors_queue.try_enqueue(input_tensors)) {
     last_error =
         "Input queue is full — inference is not keeping up with the producer";
     logger->warn("{}", last_error);
     return -1;
   }
-  sem_post(&input_sem);  // wake manager immediately — no 1ms sleep needed
-  logger->trace("Input tensors enqueued successfully.");
+  sem_post(&input_sem);
+  logger->trace("Input tensors enqueued.");
+  return 0;
+}
+
+extern "C" int receive_output(tensors_struct** output_tensors) {
+  thread_local int sleep_ms = 1;
+  if (!output_tensors_queue.try_dequeue(*output_tensors)) {
+    logger->trace("No output tensors available.");
+    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+    sleep_ms = std::min(sleep_ms * 2, 100);
+    return -1;
+  }
+  sleep_ms = std::max(sleep_ms / 10, 1);  // decay backoff on success
+#ifdef OAAX_PROFILE
+  int64_t enqueue_ns;
+  if (output_enqueue_times.try_dequeue(enqueue_ns))
+    g_profiler.output_queue_ns.fetch_add(
+        static_cast<uint64_t>(prof_now_ns() - enqueue_ns),
+        std::memory_order_relaxed);
+#endif
+  logger->debug("Output tensors received.");
   return 0;
 }
 
@@ -494,13 +513,12 @@ static void on_inference_complete(int idx, std::exception_ptr ex) {
 
   deep_free_tensors_struct(s.input);
 
-  // Push timestamp BEFORE result so receive_output() always finds it available.
+  // Push timestamp BEFORE result so receive_job() always finds it available.
 #ifdef OAAX_PROFILE
   output_enqueue_times.enqueue(prof_now_ns());
 #endif
   if (!output_tensors_queue.try_enqueue(result)) {
 #ifdef OAAX_PROFILE
-    // Pair of failed enqueue: discard the orphaned timestamp.
     int64_t discard;
     output_enqueue_times.try_dequeue(discard);
 #endif
@@ -512,6 +530,24 @@ static void on_inference_complete(int idx, std::exception_ptr ex) {
 
   free_requests.enqueue(idx);
   sem_post(&slot_sem);
+}
+
+// Allocate a fresh output buffer with the same shape/type layout as a pool
+// buffer.  Used when the pool is empty (e.g. caller freed the previous buffer
+// via deep_free_tensors_struct instead of runtime_return_output).
+static tensors_struct* alloc_pool_buffer() {
+  tensors_struct* ts = allocate_tensors_struct(output_names.size());
+  for (size_t i = 0; i < output_names.size(); ++i) {
+    ts->names[i] = strdup(output_names[i].c_str());
+    ts->ranks[i] = pool_out_infos[i].shape.size();
+    ts->shapes[i] =
+        (size_t*)malloc(sizeof(size_t) * pool_out_infos[i].shape.size());
+    for (size_t k = 0; k < pool_out_infos[i].shape.size(); ++k)
+      ts->shapes[i][k] = pool_out_infos[i].shape[k];
+    ts->data_types[i] = pool_out_infos[i].dtype;
+    ts->data[i] = malloc(pool_out_infos[i].byte_size);
+  }
+  return ts;
 }
 
 // Manager thread: dequeues inputs, acquires a free slot, sets up tensors,
@@ -547,17 +583,13 @@ static void manager_thread_func() {
     bool from_pool = pool_active.load(std::memory_order_relaxed);
 
     // Acquire a pool buffer (static shapes only).
+    // If the pool is empty (caller freed the buffer instead of returning it
+    // via runtime_return_output), allocate a fresh one so inference continues
+    // uninterrupted. Zero-copy is preserved; the new buffer is freed normally
+    // by the caller.
     if (from_pool) {
       PROF_TS(t_pool);
-      while (!output_buffer_pool.try_dequeue(output)) {
-        if (stop_manager) {
-          deep_free_tensors_struct(input);
-          free_requests.enqueue(idx);
-          sem_post(&slot_sem);
-          return;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-      }
+      if (!output_buffer_pool.try_dequeue(output)) output = alloc_pool_buffer();
       PROF_ADD(pool_wait_ns, t_pool);
     }
 
@@ -625,23 +657,6 @@ static void stop_and_join_manager() {
 
   // Wait for all callbacks still in-flight on OpenVINO's internal threads.
   for (auto& req : infer_requests) req.wait();
-}
-
-extern "C" int receive_output(tensors_struct** output_tensors) {
-  if (!output_tensors_queue.try_dequeue(*output_tensors)) {
-    logger->trace("No output tensors available.");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return -1;
-  }
-#ifdef OAAX_PROFILE
-  int64_t enqueue_ns;
-  if (output_enqueue_times.try_dequeue(enqueue_ns))
-    g_profiler.output_queue_ns.fetch_add(
-        static_cast<uint64_t>(prof_now_ns() - enqueue_ns),
-        std::memory_order_relaxed);
-#endif
-  logger->debug("Output tensors received successfully.");
-  return 0;
 }
 
 extern "C" void runtime_return_output(tensors_struct* output) {

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.2] - 2026-04-15
+
+### Runtime Library
+
+- **Fixed output buffer pool exhaustion deadlock (critical):** when all pool buffers
+  were held by the caller (e.g. using `deep_free_tensors_struct` instead of
+  `runtime_return_output`), the manager thread would spin forever waiting for a buffer
+  to return to the pool, permanently stalling inference. The pool acquisition path now
+  calls `alloc_pool_buffer()` as a fallback — allocating a fresh same-shape buffer on
+  the rare occasion the pool is empty — so inference continues uninterrupted.
+- **`receive_output` adaptive backoff:** instead of a fixed sleep, the polling interval
+  starts at 1 ms and doubles on each consecutive miss (up to 500 ms cap), then divides
+  by 10 on each successful dequeue. This keeps latency low for fast models (INT8 ~37 ms
+  inference sees ~1–2 ms overhead vs ~43 ms with a fixed 10 ms sleep) while naturally
+  backing off when the pipeline is idle.
+
+---
+
 ## [1.3.1] - 2026-04-15
 
 ### Runtime Library
@@ -22,8 +40,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   OpenVINO type mappings updated accordingly.
 - **Logger flush-on-every-message:** spdlog now calls `flush_on(level::trace)` so every
   log message is flushed immediately, ensuring full log visibility on abnormal exit.
-- **`receive_output` backpressure:** sleeps 100 ms before returning `-1` when the output
-  queue is empty, reducing busy-polling CPU overhead on the caller side.
 - **Removed debug instrumentation:** `send_input` and `manager_thread_func` had
   temporary `"IIII"` marker, seven `"Breakpoint N"` logs, and tensor-metadata dump
   loops left in from development. All removed.
