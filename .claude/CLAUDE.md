@@ -116,6 +116,7 @@ Note: iGPU outperforms the RTX A4000 here because OpenVINO's GPU plugin is optim
 | `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS`. Use `cumulative_throughput` with multi-GPU for best aggregate FPS. |
 | `log_level` | `2` (info) | spdlog level int |
 | `log_file` | `"runtime.log"` | Log file path |
+| `cache_dir` | `"."` (CWD) | Directory for OpenVINO compiled-model cache. Eliminates recompilation on subsequent loads of the same model+device. Set to `""` to disable. |
 
 **Key public API additions beyond the base OAAX spec:**
 - `runtime_return_output(tensors_struct*)` — return a received output buffer to the pool instead of calling `deep_free_tensors_struct`. Callers SHOULD use this for correct pool reuse. Falls back to `deep_free_tensors_struct` when the pool is not active (dynamic shapes).

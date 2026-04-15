@@ -18,7 +18,7 @@ from tests.models import download_calibration_images, download_model
 
 COMPILED_DIR = Path(__file__).parent / "compiled_models"
 DOCKER_IMAGE = "oaax-intel-toolchain:latest"
-YOLO_MODELS = ["yolov8n", "yolo11n"]
+YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
 
 _CONFIGS = {
     "FP32": {"optimization": {"fp16_compression": False}},
@@ -100,6 +100,12 @@ def _convert_with_docker(
             raise RuntimeError(f"No output zip produced for {model_name} {variant}")
 
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Keep the toolchain zip alongside the extracted IR so the C++ runtime
+        # can load it directly.
+        dest_zip = out_dir / f"{model_name}.zip"
+        import shutil as _shutil
+
+        _shutil.copy2(output_zips[0], dest_zip)
         with zipfile.ZipFile(output_zips[0]) as z:
             z.extractall(out_dir)
 
@@ -140,6 +146,12 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
         for variant, config in _CONFIGS.items():
             xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
             if xml.exists():
+                # Ensure a zip exists alongside the extracted IR for the C++ runtime.
+                zip_path = xml.with_suffix(".zip")
+                if not zip_path.exists() and xml.with_suffix(".bin").exists():
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        zf.write(xml, arcname=xml.name)
+                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
                 result[(model_name, variant)] = xml
                 continue
             _convert_with_docker(

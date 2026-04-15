@@ -15,6 +15,7 @@ set(SPDLOG_DIR ${DEPS_DIR}/spdlog)
 set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
 set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
 set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
+set(MINIZ_DIR ${DEPS_DIR}/miniz)
 
 # === OpenVINO Configuration ===
 # Default assumes the archive installation extracted to /opt/intel/openvino,
@@ -136,6 +137,8 @@ add_subdirectory(${TOOLS_C_UTILITIES_DIR} ${CMAKE_CURRENT_BINARY_DIR}/c_utilitie
 file(GLOB_RECURSE SRC
   ${SRC_DIR}/runtime_utils.cpp
   ${SRC_DIR}/runtime_core.cpp
+  ${SRC_DIR}/zip_utils.cpp
+  ${MINIZ_DIR}/miniz.c
 )
 
 # === Library Target ===
@@ -185,6 +188,10 @@ target_include_directories(RuntimeLibrary PUBLIC
   ${CONCURRENT_QUEUE_DIR}
   ${OPENVINO_INCLUDE_DIR}
 )
+target_include_directories(RuntimeLibrary PRIVATE
+  ${SRC_DIR}
+  ${MINIZ_DIR}
+)
 
 # === Link Directories ===
 # OPENVINO_LINK_DIR can point to a directory of unversioned symlinks when the
@@ -208,7 +215,6 @@ if(MSVC)
     openvino
     ws2_32 bcrypt
   )
-
   # Copy OpenVINO DLLs (excluding unused frontends) and bundled TBB DLLs
   # alongside RuntimeLibrary.dll. Uses cmake -P to glob at BUILD time so the
   # DLLs don't need to exist yet when cmake configures.
@@ -231,7 +237,6 @@ else()
     pthread dl c_utilities stdc++
     -Wl,--end-group
   )
-
   # Copy only the OpenVINO libs needed at runtime: core, device plugins,
   # IR frontend, and threading libs. Unused model-format frontends are excluded
   # to keep the package lean — the runtime only loads OpenVINO IR (.xml) files.

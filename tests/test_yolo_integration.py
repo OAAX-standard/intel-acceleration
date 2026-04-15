@@ -18,7 +18,7 @@ import pytest
 
 from tests.models import TEST_MODELS
 
-YOLO_MODELS = ["yolov8n", "yolo11n"]
+YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
 
 
 def _infer(xml: Path, model_name: str, img_value: float = 0.0) -> np.ndarray:
