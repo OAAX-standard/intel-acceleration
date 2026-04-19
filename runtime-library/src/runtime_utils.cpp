@@ -1,112 +1,102 @@
 #include "runtime_utils.hpp"
 
 #include <spdlog/async.h>
-#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include <iostream>
 #include <openvino/openvino.hpp>
-#include <vector>
 
-#include "concurrentqueue.h"
-
-using namespace std;
-
-// Map tensor_data_type to OpenVINO element type
-ov::element::Type map_to_ov_type(tensor_data_type t) {
+ov::element::Type map_to_ov_type(TensorElementType t) {
   switch (t) {
     case DATA_TYPE_FLOAT:
       return ov::element::f32;
-    case DATA_TYPE_UINT8:
-      return ov::element::u8;
+    case DATA_TYPE_FLOAT16:
+      return ov::element::f16;
+    case DATA_TYPE_BFLOAT16:
+      return ov::element::bf16;
+    case DATA_TYPE_DOUBLE:
+      return ov::element::f64;
     case DATA_TYPE_INT8:
       return ov::element::i8;
-    case DATA_TYPE_UINT16:
-      return ov::element::u16;
     case DATA_TYPE_INT16:
       return ov::element::i16;
     case DATA_TYPE_INT32:
       return ov::element::i32;
     case DATA_TYPE_INT64:
       return ov::element::i64;
-    case DATA_TYPE_BOOL:
-      return ov::element::boolean;
-    case DATA_TYPE_DOUBLE:
-      return ov::element::f64;
+    case DATA_TYPE_UINT8:
+      return ov::element::u8;
+    case DATA_TYPE_UINT16:
+      return ov::element::u16;
     case DATA_TYPE_UINT32:
       return ov::element::u32;
     case DATA_TYPE_UINT64:
       return ov::element::u64;
+    case DATA_TYPE_BOOL:
+      return ov::element::boolean;
     case DATA_TYPE_STRING:
       return ov::element::string;
+    case DATA_TYPE_INT4:
+      return ov::element::i4;
+    case DATA_TYPE_UINT4:
+      return ov::element::u4;
     default:
-      throw std::runtime_error("Unsupported data type!");
+      throw std::runtime_error("Unsupported or unmapped TensorElementType: " +
+                               std::to_string(static_cast<int>(t)));
   }
 }
 
-// Map OpenVINO element type to tensor_data_type
-tensor_data_type map_to_tensors_struct_type(ov::element::Type type) {
+TensorElementType map_from_ov_type(ov::element::Type type) {
   if (type == ov::element::f32) return DATA_TYPE_FLOAT;
-  if (type == ov::element::u8) return DATA_TYPE_UINT8;
+  if (type == ov::element::f16) return DATA_TYPE_FLOAT16;
+  if (type == ov::element::bf16) return DATA_TYPE_BFLOAT16;
+  if (type == ov::element::f64) return DATA_TYPE_DOUBLE;
   if (type == ov::element::i8) return DATA_TYPE_INT8;
-  if (type == ov::element::u16) return DATA_TYPE_UINT16;
   if (type == ov::element::i16) return DATA_TYPE_INT16;
   if (type == ov::element::i32) return DATA_TYPE_INT32;
   if (type == ov::element::i64) return DATA_TYPE_INT64;
-  if (type == ov::element::boolean) return DATA_TYPE_BOOL;
-  if (type == ov::element::f64) return DATA_TYPE_DOUBLE;
+  if (type == ov::element::u8) return DATA_TYPE_UINT8;
+  if (type == ov::element::u16) return DATA_TYPE_UINT16;
   if (type == ov::element::u32) return DATA_TYPE_UINT32;
   if (type == ov::element::u64) return DATA_TYPE_UINT64;
+  if (type == ov::element::boolean) return DATA_TYPE_BOOL;
   if (type == ov::element::string) return DATA_TYPE_STRING;
-  throw std::runtime_error("Unsupported OpenVINO element type!");
+  if (type == ov::element::i4) return DATA_TYPE_INT4;
+  if (type == ov::element::u4) return DATA_TYPE_UINT4;
+  throw std::runtime_error("Unsupported OpenVINO element type: " +
+                           type.get_type_name());
 }
 
-void free_queue(moodycamel::ConcurrentQueue<tensors_struct *> &queue) {
-  tensors_struct *tensor;
-  while (queue.try_dequeue(tensor)) {
-    deep_free_tensors_struct(tensor);
-  }
-}
-
-std::shared_ptr<spdlog::logger> initialize_logger(const string &log_file,
+std::shared_ptr<spdlog::logger> initialize_logger(const std::string &log_file,
                                                   int file_level,
                                                   int console_level,
-                                                  const string prefix) {
+                                                  const std::string prefix) {
   try {
-    // Create a console logger
-    auto console_sink = make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     console_sink->set_level(
         static_cast<spdlog::level::level_enum>(console_level));
 
-    // Create a rotating file logger
-    auto file_sink = make_shared<spdlog::sinks::rotating_file_sink_st>(
-        log_file, 1024 * 1024 * 5, 3);  // 5MB max size, 3 rotated files
+    auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
+        log_file, 1024 * 1024 * 5, 3);
     file_sink->set_level(static_cast<spdlog::level::level_enum>(file_level));
 
-    // Configure the thread pool for async logging
     static auto thread_pool =
-        make_shared<spdlog::details::thread_pool>(8192, 1);
+        std::make_shared<spdlog::details::thread_pool>(8192, 1);
 
-    // Create the async logger with both sinks using the thread pool
-    auto logger = make_shared<spdlog::async_logger>(
+    auto logger = std::make_shared<spdlog::async_logger>(
         prefix, spdlog::sinks_init_list{console_sink, file_sink}, thread_pool,
         spdlog::async_overflow_policy::overrun_oldest);
 
-    // Set the logging pattern
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [" + prefix + "] [%^%l%$] %v");
-
-    // Set the logger level to the lowest level among the sinks
     logger->set_level(static_cast<spdlog::level::level_enum>(
         std::min(file_level, console_level)));
-
-    // Flush on every message regardless of level
     logger->flush_on(spdlog::level::trace);
 
-    return logger;  // Return the logger instance
+    return logger;
   } catch (const spdlog::spdlog_ex &ex) {
-    cerr << "Logger initialization failed: " << ex.what() << "\n";
+    std::cerr << "Logger initialization failed: " << ex.what() << "\n";
     exit(EXIT_FAILURE);
   }
 }
@@ -115,6 +105,6 @@ void destroy_logger(std::shared_ptr<spdlog::logger> logger) {
   if (logger) {
     logger->flush();
     spdlog::drop(logger->name());
-    logger = nullptr;  // This destroys the logger and frees resources
+    logger = nullptr;
   }
 }
