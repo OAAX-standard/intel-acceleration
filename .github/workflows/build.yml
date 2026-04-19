@@ -263,17 +263,6 @@ jobs:
           fetch-depth: 1
           submodules: 'recursive'
 
-      - name: Install OpenVINO
-        shell: pwsh
-        run: |
-          $ovArchive = "openvino_toolkit_windows_2026.1.0.21367.63e31528c62_x86_64.zip"
-          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/windows/$ovArchive"
-          Invoke-WebRequest -Uri $url -OutFile openvino.zip
-          Expand-Archive -Path openvino.zip -DestinationPath C:\intel -Force
-          Remove-Item openvino.zip
-          $ovDir = (Get-ChildItem -Path C:\intel -Filter "openvino_toolkit_*" | Select-Object -First 1).FullName
-          echo "OPENVINO_DIR=$ovDir\runtime" >> $env:GITHUB_ENV
-
       - name: Determine version
         shell: pwsh
         run: |
@@ -298,7 +287,7 @@ jobs:
           name: compiled-models
           path: tests/compiled_models
 
-      - name: Stage 2 — run runtime tests
+      - name: Stage 2 — build test binaries and run tests
         run: python tests/stage2.py
 
       - name: Upload runtime log
