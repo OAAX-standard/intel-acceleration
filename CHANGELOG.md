@@ -6,6 +6,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.0] - 2026-04-19
+
+### Runtime Library — OAAX v2 Interface
+
+Breaking change: the runtime now implements the OAAX v2 standard interface (`oaax_runtime.h`).
+The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_output`,
+`runtime_return_output`, `runtime_destruction`) are replaced by the new API.
+
+**New public header:** `oaax_runtime.h` replaces `runtime_core.hpp` and `tensors_struct.h`.
+
+**New types:**
+- `TensorDescriptor` — array-of-structs layout (name, data_type, rank, shape, data_size, data
+  co-located per tensor for cache locality); replaces the struct-of-arrays `tensors_struct`
+- `Tensors` — wraps an array of `TensorDescriptor` plus a caller-assigned `id` for request correlation
+- `TensorElementType` — expanded enum: adds `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`,
+  `DATA_TYPE_INT4`, `DATA_TYPE_UINT4`, and other ONNX-aligned types
+- `Config` / `ModelConfig` — key-value configuration structs for init and per-model settings
+- `RuntimeStatus` — fine-grained status codes (18 values) replacing int return codes
+
+**New API functions:**
+- `runtime_init(Config)` — initialize with key-value config
+- `runtime_load_models(n, ModelConfig[])` — load N models in one call; each model can override
+  `device_type`, `perf_hint`, `cache_dir` from the global config; returns `ALREADY_INITIALIZED`
+  if called twice (requires `runtime_cleanup()` first)
+- `runtime_enqueue_input(model_id, Tensors*)` — enqueue to a specific model; runtime takes
+  ownership on success, caller frees on failure
+- `runtime_retrieve_output(int *model_id, Tensors**, timeout_ms)` — dequeue from the global
+  output queue (any model); fills `*model_id`; `timeout_ms=0` non-blocking, `<0` block forever,
+  `>0` timed wait via `sem_timedwait` (Linux) / `WaitForSingleObject` (Windows)
+- `runtime_cleanup()` — idempotent teardown
+- `runtime_get_error()` — returns last error string or NULL
+- `runtime_get_info()` — returns JSON diagnostics (loaded_models, requests_in_flight,
+  backend_version, active_device)
+
+**Architecture changes:**
+- Per-model manager thread and infer-request pool; global output semaphore for blocking retrieve
+- Standard `malloc`/`free` per output (output buffer pool removed per v2 spec)
+- Callbacks capture `(model_id, slot_idx)` — one registration per slot at load time
+
+**Benchmark results (Intel Core i7-12700K, CPU, batch=1, 300 runs):**
+
+| Model | Precision | benchmark_app | OAAX v2 runtime | Delta |
+|-------|-----------|--------------|-----------------|-------|
+| yolo11n | FP32 | ~99 FPS | ~93 FPS | -6% |
+| yolo11n | INT8 | ~238 FPS | ~223 FPS | -6% |
+| yolov8n | FP32 | ~84 FPS | ~82 FPS | -2% |
+| yolov8n | INT8 | ~235 FPS | ~223 FPS | -5% |
+| yolo11s | FP32 | ~33 FPS | ~33 FPS | 0% |
+| yolo11s | INT8 | ~99 FPS | ~98 FPS | -1% |
+
+---
+
 ## [1.3.2] - 2026-04-15
 
 ### Runtime Library

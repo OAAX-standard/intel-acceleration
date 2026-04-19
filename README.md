@@ -40,6 +40,11 @@ bash build-runtimes.sh        # set OPENVINO_DIR if not at /opt/intel/openvino/r
 See [`conversion-toolchain/README.md`](conversion-toolchain/README.md) and
 [`runtime-library/README.md`](runtime-library/README.md) for detailed instructions.
 
+> **v2 API:** The runtime now implements the OAAX v2 interface (`oaax_runtime.h`).
+> Key changes: multi-model loading (`runtime_load_models`), request correlation via `Tensors.id`,
+> blocking `runtime_retrieve_output` with timeout, and `runtime_get_info` JSON diagnostics.
+> See [`runtime-library/README.md`](runtime-library/README.md) for the full API reference.
+
 ## Testing
 
 Tests run in two stages. Stage 1 compiles models; Stage 2 benchmarks them.
@@ -66,22 +71,25 @@ pytest tests/test_docker.py -v                 # Docker image tests (image must 
 pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
 ```
 
-## Benchmark results (Intel Core i7-12700K, hint=throughput)
+## Benchmark results (Intel Core i7-12700K, CPU, batch=1)
 
-### CPU benchmarks (`benchmark_app`, batch=1)
+### `benchmark_app` vs OAAX v2 runtime (300 runs, warmup=5)
 
-| Model | Precision | Throughput |
-|-------|-----------|------------|
-| yolo11n | FP32 | ~96 FPS |
-| yolo11n | FP16 | ~94 FPS |
-| yolo11n | INT8 | **~229 FPS** |
-| yolov8n | FP32 | ~81 FPS |
-| yolov8n | FP16 | ~80 FPS |
-| yolo11s | FP32 | ~32 FPS |
-| yolo11s | FP16 | ~32 FPS |
+| Model | Precision | benchmark_app | OAAX runtime | Delta |
+|-------|-----------|--------------|--------------|-------|
+| yolo11n | FP32 | ~99 FPS | ~93 FPS | -6% |
+| yolo11n | FP16 | ~97 FPS | ~95 FPS | -2% |
+| yolo11n | INT8 | **~238 FPS** | **~223 FPS** | -6% |
+| yolov8n | FP32 | ~84 FPS | ~82 FPS | -2% |
+| yolov8n | FP16 | ~83 FPS | ~83 FPS | 0% |
+| yolov8n | INT8 | **~235 FPS** | **~223 FPS** | -5% |
+| yolo11s | FP32 | ~33 FPS | ~33 FPS | 0% |
+| yolo11s | INT8 | ~99 FPS | ~98 FPS | -1% |
 
 > FP32 and FP16 are identical on this CPU — the i7-12700K has no native FP16 ALU;
 > OpenVINO computes FP16 models as FP32 internally. Only INT8 benefits from AVX2/VNNI (~2.5×).
+>
+> The ~5% gap vs `benchmark_app` comes from producer/consumer thread overhead in the C API boundary.
 
 ### GPU benchmarks (iGPU UHD 770 + dGPU RTX A4000, `yolo_test` OAAX runtime)
 
@@ -92,9 +100,7 @@ pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
 | yolo11n | FP32 | ~75 FPS | ~67 FPS | **~130 FPS** |
 | yolo11n | INT8 | ~103 FPS | ~71 FPS | **~156 FPS** |
 
-The OAAX runtime matches `benchmark_app` within ~4% on CPU. The GPU throughput gap vs
-`benchmark_app` (~9–13%) comes from H2D/D2H memory transfers through the C API boundary;
-use the `MULTI` device with `perf_hint=cumulative_throughput` for best aggregate GPU FPS.
+Use `device_type=GPU` with `perf_hint=cumulative_throughput` for best multi-GPU aggregate FPS.
 
 ## Contributing
 

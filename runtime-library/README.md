@@ -1,6 +1,6 @@
 # OAAX Runtime Library (OpenVINO)
 
-C++ shared library implementing the OAAX inference interface on Intel hardware using the OpenVINO native C++ API. Supports CPU, GPU, and NPU on x86_64 Linux and Windows.
+C++ shared library implementing the OAAX v2 inference interface on Intel hardware using the OpenVINO native C++ API. Supports CPU, GPU, and NPU on x86_64 Linux and Windows.
 
 ## Prerequisites
 
@@ -42,79 +42,157 @@ cd runtime-library
 build-runtime.bat
 ```
 
-Output in `runtime-library/artifacts/Windows/`:  `RuntimeLibrary.dll` + OpenVINO + TBB DLLs.
+Output in `runtime-library/artifacts/Windows/`: `RuntimeLibrary.dll` + OpenVINO + TBB DLLs.
 
 ## API usage
 
-Include `runtime_core.hpp` and link against `RuntimeLibrary`.
+Include `oaax_runtime.h` and link against `RuntimeLibrary`.
 
 ```c
-#include "runtime_core.hpp"
+#include "oaax_runtime.h"
 
-// 1. Initialize (device and performance hint are optional)
-char *keys[]   = {"device_type", "perf_hint"};
-void *values[] = {"CPU", "throughput"};
-runtime_initialization_with_args(2, keys, values);
+// 1. Initialize runtime
+const char *keys[]   = {"device_type", "perf_hint"};
+const char *values[] = {"CPU", "latency"};
+Config cfg = {2, keys, values};
+runtime_init(cfg);
 
-// 2. Load model (.zip bundle from the toolchain, or bare .xml with .bin alongside)
-runtime_model_loading("/path/to/model.zip");
+// 2. Load one or more models (zip bundle from the toolchain)
+ModelConfig mc = {};
+mc.file_path = "/path/to/model.zip";
+runtime_load_models(1, &mc);
 
-// 3. Send input (runtime takes ownership; do not free after this call)
-send_input(input_tensors);
+// 3. Enqueue input (runtime takes ownership on success)
+Tensors *input = /* allocate and fill */;
+input->id = 42;           // caller-assigned ID echoed on output
+runtime_enqueue_input(0, input);   // 0 = model index
 
-// 4. Poll for result
-tensors_struct *output = NULL;
-while (receive_output(&output) != 0) {}   // non-blocking; retry until ready
+// 4. Retrieve output (blocks up to timeout_ms; -1 = wait forever)
+int model_id;
+Tensors *output = NULL;
+while (runtime_retrieve_output(&model_id, &output, 5) ==
+       RUNTIME_STATUS_NO_OUTPUT_AVAILABLE) {}
 
-// 5. Use output, then return buffer to pool
-runtime_return_output(output);            // preferred over deep_free_tensors_struct
+// use output->tensors[i].data ...
+// output->id matches the input->id you set above
+
+// 5. Free output (caller owns it after retrieve)
+for (int i = 0; i < output->num_tensors; ++i) {
+    free(output->tensors[i].name);
+    free(output->tensors[i].shape);
+    free(output->tensors[i].data);
+}
+free(output->tensors);
+free(output);
 
 // 6. Tear down
-runtime_destruction();
+runtime_cleanup();
 ```
-
-> **Important:** Use `runtime_return_output()` to release output buffers, not
-> `deep_free_tensors_struct()`. The runtime pre-allocates an output buffer pool for
-> zero-copy inference; `runtime_return_output()` recycles the buffer back into the pool.
-> `deep_free_tensors_struct()` frees the memory outright and should only be used if
-> you received the output after calling `runtime_destruction()`.
 
 ## Configuration
 
-All parameters are passed as strings to `runtime_initialization_with_args`.
+### Global (`runtime_init`)
 
 | Key | Default | Values | Description |
 |-----|---------|--------|-------------|
-| `device_type` | `"CPU"` | `"CPU"` `"GPU"` `"NPU"` | Target inference device |
+| `device_type` | `"CPU"` | `"CPU"` `"GPU"` `"NPU"` | Target inference device. `"GPU"` auto-activates MULTI if multiple GPUs found. |
 | `perf_hint` | `"latency"` | `"latency"` `"throughput"` `"cumulative_throughput"` | OpenVINO performance mode |
-| `cache_dir` | `"."` (CWD) | any path or `""` | Directory for OpenVINO compiled-model cache. Eliminates recompilation on restart (~400 ms → ~47 ms). Set to `""` to disable. |
-| `log_level` | `"2"` (info) | `"0"`–`"6"` | spdlog level: 0=trace, 2=info, 4=warn, 6=off |
+| `cache_dir` | `"."` | any path or `""` | OpenVINO compiled-model cache. Eliminates recompilation on restart. `""` to disable. |
+| `log_level` | `"2"` | `"0"`–`"6"` | spdlog level: 0=trace, 2=info, 4=warn, 6=off |
 | `log_file` | `"runtime.log"` | any path | Log output file |
 
-If `device_type` compilation fails (e.g. no GPU present), the runtime automatically falls
-back to CPU and logs a warning.
+### Per-model (`ModelConfig.config`)
+
+Each model inherits the global config and can override any key:
+
+| Key | Inherits from | Description |
+|-----|--------------|-------------|
+| `device_type` | global | Run this model on a specific device |
+| `perf_hint` | global | Override performance mode for this model |
+| `cache_dir` | global | Override cache directory for this model |
+
+Example — run two models on different devices:
+
+```c
+ModelConfig models[2] = {};
+models[0].file_path = "/path/to/detector.zip";
+// detector uses global device (CPU)
+
+const char *gpu_keys[]   = {"device_type"};
+const char *gpu_values[] = {"GPU"};
+models[1].file_path = "/path/to/classifier.zip";
+models[1].config    = (Config){1, gpu_keys, gpu_values};
+
+runtime_load_models(2, models);
+```
 
 ## Working with tensors
 
-`tensors_struct` is defined in `include/tensors_struct.h`. Use the provided helpers:
+`TensorDescriptor` and `Tensors` are defined in `include/oaax_runtime.h`.
 
 ```c
-// Allocate
-tensors_struct *ts = allocate_tensors_struct(1);
-ts->names[0]      = strdup("images");
-ts->ranks[0]      = 4;
-ts->shapes[0]     = malloc(4 * sizeof(size_t));
-ts->shapes[0][0]  = 1; ts->shapes[0][1] = 3;
-ts->shapes[0][2]  = 640; ts->shapes[0][3] = 640;
-ts->data_types[0] = DATA_TYPE_FLOAT;
-ts->data[0]       = malloc(1 * 3 * 640 * 640 * sizeof(float));
+// Allocate input
+Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
+ts->id          = request_id;   // echoed on output for correlation
+ts->num_tensors = 1;
+ts->tensors     = (TensorDescriptor *)malloc(sizeof(TensorDescriptor));
 
-// Free (only when NOT using runtime_return_output)
-deep_free_tensors_struct(ts);
+TensorDescriptor *td = &ts->tensors[0];
+td->name      = strdup("images");
+td->data_type = DATA_TYPE_FLOAT;
+td->rank      = 4;
+td->shape     = (int *)malloc(4 * sizeof(int));
+td->shape[0]  = 1; td->shape[1] = 3;
+td->shape[2]  = 640; td->shape[3] = 640;
+td->data_size = 1 * 3 * 640 * 640 * sizeof(float);
+td->data      = malloc(td->data_size);
 ```
 
-Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_INT8`, `DATA_TYPE_UINT8`,
-`DATA_TYPE_INT32`, `DATA_TYPE_INT64`, and others — see `tensors_struct.h`.
+Supported data types: `DATA_TYPE_FLOAT` (FP32), `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`,
+`DATA_TYPE_INT8`, `DATA_TYPE_UINT8`, `DATA_TYPE_INT32`, `DATA_TYPE_INT64`, `DATA_TYPE_INT4`,
+`DATA_TYPE_UINT4`, and more — see `oaax_runtime.h`.
+
+## Multi-model inference
+
+When multiple models are loaded, all output to a single global queue.
+Use `output->id` (echoed from input) to correlate results with requests.
+
+```c
+// Enqueue to model 0
+input0->id = 100;
+runtime_enqueue_input(0, input0);
+
+// Enqueue to model 1
+input1->id = 200;
+runtime_enqueue_input(1, input1);
+
+// Retrieve — can come from any model
+int model_id;
+Tensors *output;
+runtime_retrieve_output(&model_id, &output, -1);  // -1 = wait forever
+// model_id tells you which model produced this output
+// output->id tells you which request it was
+```
+
+## Error handling
+
+```c
+RuntimeStatus st = runtime_init(cfg);
+if (st != RUNTIME_STATUS_SUCCESS) {
+    const char *msg = runtime_get_error();  // human-readable description
+    fprintf(stderr, "Init failed (%d): %s\n", st, msg);
+}
+```
+
+`runtime_get_error()` returns NULL if no error has occurred.
+
+## Diagnostics
+
+```c
+const char *info = runtime_get_info();
+// Returns a JSON object, e.g.:
+// {"loaded_models":2,"requests_in_flight":3,"backend_version":"2026.1.0-...","active_device":"CPU"}
+```
 
 ## Troubleshooting
 
@@ -131,21 +209,16 @@ OPENVINO_DIR=/path/to/openvino_toolkit_.../runtime bash build-runtimes.sh
 ```
 error while loading shared libraries: libopenvino.so.2610: cannot open shared object file
 ```
-All required `.so` files are in the `artifacts/X86_64/` directory. Deploy them alongside
-`libRuntimeLibrary.so` and set `LD_LIBRARY_PATH` if not using RPATH:
+Deploy all `.so` files from `artifacts/X86_64/` alongside `libRuntimeLibrary.so`:
 ```bash
 export LD_LIBRARY_PATH=/path/to/artifacts/X86_64:$LD_LIBRARY_PATH
 ```
 
 **Model loading fails**
-Pass either a `.zip` bundle (output from the toolchain) or a bare `.xml` path with the `.bin` file in the same directory:
-```bash
-# Preferred — toolchain output bundle
-runtime_model_loading("/path/to/model.zip");
-
-# Also accepted — bare IR files
-runtime_model_loading("/path/to/model.xml");
-ls model.xml model.bin   # .bin must be alongside .xml
+Pass a `.zip` bundle as produced by the conversion toolchain:
+```c
+mc.file_path = "/path/to/model.zip";
+runtime_load_models(1, &mc);
 ```
 
 ## Project structure
@@ -158,8 +231,8 @@ runtime-library/
 │   ├── zip_utils.cpp       # ZIP extraction for .zip model bundles
 │   └── zip_utils.hpp
 ├── include/
-│   ├── runtime_core.hpp    # public C API (OAAX interface)
-│   └── tensors_struct.h    # OAAX tensor structure and helpers
+│   ├── oaax_runtime.h      # public C API (OAAX v2 interface)
+│   └── runtime_utils.hpp   # internal utilities
 ├── deps/
 │   ├── spdlog/             # logging
 │   ├── concurrentqueue/    # lock-free queue

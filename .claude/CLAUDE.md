@@ -13,7 +13,7 @@ Model flow: `ONNX → [Toolchain] → OpenVINO IR (.xml + .bin) → [Runtime] �
 
 - Repository: https://github.com/OAAX-standard/intel-acceleration
 - Version: see `VERSION` file
-- OAAX interface spec: `runtime-library/include/runtime_core.hpp`
+- OAAX interface spec: `runtime-library/include/oaax_runtime.h` (v2)
 
 ---
 
@@ -81,54 +81,40 @@ Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calib
 ### Runtime Library (`runtime-library/`)
 
 - `src/runtime_core.cpp` — OpenVINO inference, async queue-based execution
-- `src/runtime_utils.cpp` — type mapping between `tensor_data_type` and `ov::element::Type`
-- `include/tensors_struct.h` — OAAX C tensor struct (names, ranks, shapes, data_types, data)
-- `include/runtime_core.hpp` — public C API (OAAX interface)
+- `src/runtime_utils.cpp` — type mapping between `TensorElementType` and `ov::element::Type`
+- `include/oaax_runtime.h` — public C API (OAAX v2 interface)
+- `include/runtime_utils.hpp` — internal utilities
 - `deps/` — vendored: spdlog, concurrentqueue, c-utilities
 
-**Inference architecture:**
-- Single manager thread dequeues inputs, acquires a free `ov::InferRequest` slot, and calls `start_async()`
-- Completion callbacks post results to `output_tensors_queue` and return the slot to the pool
-- Workers write output into a pre-allocated buffer pool (no malloc on hot path)
-- Results enqueue to `output_tensors_queue`; caller polls via `receive_output()`
-- FIFO ordering is NOT guaranteed when N > 1
+**Inference architecture (v2):**
+- Per-model manager thread dequeues inputs, acquires a free `ov::InferRequest` slot, calls `start_async()`
+- Completion callbacks malloc output `Tensors`, copy data, post to a single global output queue
+- Caller retrieves from global queue via `runtime_retrieve_output(int *model_id, Tensors**, timeout_ms)`
+- `timeout_ms=0`: non-blocking; `<0`: block forever; `>0`: timed wait via `sem_timedwait`
+- `Tensors.id` (set by caller on input) is echoed on output for request correlation
+- FIFO ordering is NOT guaranteed across models
 
 **Multi-GPU auto-detection:**
-When `device_type="GPU"` and multiple GPU devices are present, the runtime automatically constructs a `MULTI:GPU.0,GPU.1,...` device string and compiles for all GPUs. OpenVINO's MULTI plugin then distributes inference requests across them. Explicit device strings (e.g. `"GPU.0"`, `"MULTI:GPU.0,GPU.1"`) are passed through unchanged.
+When `device_type="GPU"` and multiple GPU devices are present, the runtime automatically constructs a `MULTI:GPU.0,GPU.1,...` device string. Explicit device strings are passed through unchanged. Use `perf_hint=cumulative_throughput` with MULTI for best aggregate FPS.
 
-Benchmark results on Intel Core i7-12700K (UHD 770 iGPU + RTX A4000 dGPU), YOLOv8n FP32:
-
-| Config | Hint | Infer requests | Throughput |
-|--------|------|---------------|------------|
-| GPU.0 (iGPU only) | latency | 1 | ~68 FPS |
-| GPU.1 (dGPU only) | latency | 1 | ~52 FPS |
-| GPU (MULTI auto) | latency | 2 | ~68 FPS (routes to fastest) |
-| GPU (MULTI auto) | cumulative_throughput | 8 | **~114 FPS** |
-| GPU (MULTI auto) | throughput | 8 | ~112 FPS |
-
-Note: iGPU outperforms the RTX A4000 here because OpenVINO's GPU plugin is optimised for Intel hardware; NVIDIA runs via a generic OpenCL path.
-
-**Runtime initialization args** (passed via `runtime_initialization_with_args`):
+**Runtime config** (`runtime_init` Config keys, overridable per-model in `ModelConfig.config`):
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs found), `"GPU.0"`, `"NPU"` |
-| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` — passed as `ov::hint::performance_mode` at compile time; worker count is inferred automatically via `OPTIMAL_NUMBER_OF_INFER_REQUESTS`. Use `cumulative_throughput` with multi-GPU for best aggregate FPS. |
-| `log_level` | `2` (info) | spdlog level int |
+| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs), `"GPU.0"`, `"NPU"` |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` |
+| `log_level` | `"2"` (info) | spdlog level int as string |
 | `log_file` | `"runtime.log"` | Log file path |
-| `cache_dir` | `"."` (CWD) | Directory for OpenVINO compiled-model cache. Eliminates recompilation on subsequent loads of the same model+device. Set to `""` to disable. |
+| `cache_dir` | `"."` (CWD) | OpenVINO compiled-model cache. Set to `""` to disable. |
 
-**Key public API additions beyond the base OAAX spec:**
-- `runtime_return_output(tensors_struct*)` — return a received output buffer to the pool instead of calling `deep_free_tensors_struct`. Callers SHOULD use this for correct pool reuse. Falls back to `deep_free_tensors_struct` when the pool is not active (dynamic shapes).
-
-**Output buffer pool:**
-After model loading, if all output shapes are static, the runtime pre-allocates `actual_requests × 4` `tensors_struct` objects. Workers memcpy into these — no malloc/free on the hot path. Eliminates mmap/munmap syscalls from large allocation calls, which is significant at INT8 speeds (~255 FPS).
+**Output ownership:** caller owns `Tensors*` returned by `runtime_retrieve_output` and must free
+`tensors[i].name`, `tensors[i].shape`, `tensors[i].data`, `tensors`, and the `Tensors` struct itself.
 
 **Batch size behaviour (verified on i7-12700K):**
-- **CPU**: Batch=1 is optimal with `throughput` hint — OpenVINO already runs multiple concurrent InferRequests across all cores; batching serializes work without adding parallelism.
-- **iGPU (Intel)**: Minor throughput plateau at batch 4-8; batch=1 is still near-optimal.
-- **dGPU via OpenCL (NVIDIA)**: Degrades sharply beyond batch=2 — OpenCL kernel overhead on NVIDIA not optimized in OpenVINO. An Intel Xe dGPU would differ.
-- For batch > 1, use `tests/benchmark_batch_sweep.py` which exports from `.pt` with explicit batch dims (simple IR reshape fails on YOLO due to hardcoded DFL reshape ops).
+- **CPU**: Batch=1 is optimal with `throughput` hint.
+- **iGPU (Intel)**: Minor plateau at batch 4-8; batch=1 is still near-optimal.
+- **dGPU via OpenCL (NVIDIA)**: Degrades sharply beyond batch=2.
+- For batch > 1, use `tests/benchmark_batch_sweep.py` which exports from `.pt` with explicit batch dims.
 
 ### CMake Build
 
@@ -138,7 +124,7 @@ CMake requires `-DPLATFORM=X86_64 -DRUNTIME_VERSION=<ver> -DOPENVINO_DIR=<path>`
 
 ## Key Constraints
 
-- **Never break the public C API** in `runtime_core.hpp` — dynamically loaded by callers
+- **Never break the public C API** in `oaax_runtime.h` — dynamically loaded by callers
 - **Preserve exit codes** — automation depends on them
 - **Toolchain input must be a zip** containing `model.onnx` (`.onnx` bare file also accepted per OAAX spec)
 - **Runtime loads `.xml` files** (OpenVINO IR); the `.bin` file must be co-located

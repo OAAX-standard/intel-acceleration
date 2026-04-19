@@ -1,8 +1,8 @@
 # Intel Acceleration Project Status
 
 **Project:** OAAX Implementation for Intel Hardware
-**Version:** 1.3.2
-**Last Updated:** 2026-04-15
+**Version:** 2.0.0
+**Last Updated:** 2026-04-19
 
 ---
 
@@ -16,7 +16,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Current Status
 
-**Last Updated:** 2026-04-15 (v1.3.2 pool exhaustion fix + receive_output backpressure)
+**Last Updated:** 2026-04-19 (v2.0.0 OAAX v2 interface implementation)
 
 ### ✅ Completed Phases
 
@@ -121,7 +121,24 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Next Steps (Phase 3+)
 
-### Phase 3: Production Hardening (IN PROGRESS)
+### Phase 3: Production Hardening (COMPLETED)
+
+#### v2.0.0 — OAAX v2 Interface (2026-04-19)
+- ✅ New public header `oaax_runtime.h`: `RuntimeStatus` enum (18 codes), `TensorElementType` (27 types), `TensorDescriptor` (AoS layout), `Tensors` with request `id`, `Config`, `ModelConfig`
+- ✅ `runtime_init` / `runtime_cleanup` (idempotent) replace `runtime_initialization` / `runtime_destruction`
+- ✅ `runtime_load_models`: N models in one call, per-model config (device_type/perf_hint/cache_dir inherit from global)
+- ✅ `runtime_enqueue_input(model_id, Tensors*)`: model routing; runtime owns input on success
+- ✅ `runtime_retrieve_output(int *model_id, Tensors**, timeout_ms)`: global output queue; blocking with `sem_timedwait` (Linux) / `WaitForSingleObject` (Windows); `Tensors.id` echoed for request correlation
+- ✅ `runtime_get_error()` / `runtime_get_info()` (JSON diagnostics)
+- ✅ Standard malloc/free per output (pool removed per v2 spec)
+- ✅ Per-model manager thread + global output semaphore
+- ✅ Type mapping expanded: `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`, `DATA_TYPE_INT4`, `DATA_TYPE_UINT4`
+- ✅ Tests updated to v2 API; stage2.py output format unchanged
+- ✅ All 79 Python tests + 9 runtime benchmarks passing
+
+---
+
+### Phase 3: Production Hardening (PREVIOUSLY IN PROGRESS)
 **Target:** Q2 2026
 **Priority:** High
 **Status:** Partially complete
