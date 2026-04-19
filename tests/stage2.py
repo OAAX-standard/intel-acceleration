@@ -6,6 +6,7 @@ Runs benchmark_app (if available) and yolo_test across all compiled models.
 
 Usage:
     python tests/stage2.py [--devices CPU,GPU.0] [--duration 10]
+                           [--perf-hints latency,throughput]
                            [--csv results.csv] [--skip-runtime]
                            [--runs 300] [--warmup 5]
 """
@@ -41,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration", type=int, default=10, help="benchmark_app duration in seconds")
     p.add_argument("--runs", type=int, default=300, help="yolo_test inference runs")
     p.add_argument("--warmup", type=int, default=5, help="yolo_test warmup runs")
+    p.add_argument(
+        "--perf-hints",
+        default="throughput",
+        help="Comma-separated perf hints to test (default: throughput)",
+    )
     p.add_argument("--csv", default="", help="Path to output CSV file")
     p.add_argument("--skip-runtime", action="store_true", help="Skip yolo_test section")
     return p.parse_args()
@@ -148,7 +154,7 @@ def run_process(cmd: list, cwd=None, env=None, timeout: int = 120) -> str | None
         return None
 
 
-def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
+def run_benchmark_app(xml: Path, device: str, duration: int, perf_hint: str = "throughput") -> tuple | None:
     bench = find_benchmark_app()
     if bench is None:
         return None
@@ -160,7 +166,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
             "-d",
             device,
             "-hint",
-            "throughput",
+            perf_hint,
             "-latency_percentile",
             "95",
             "-t",
@@ -179,7 +185,9 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
     )
 
 
-def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1) -> tuple | None:
+def run_yolo_test(
+    zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1, perf_hint: str = "throughput"
+) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
         print(f"  [error] yolo_test binary not found: {binary}")
@@ -196,7 +204,7 @@ def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int, batch: in
         "--runs",
         str(runs),
         "--perf-hint",
-        "throughput",
+        perf_hint,
     ]
     if batch > 1:
         cmd += ["--batch", str(batch)]
@@ -234,7 +242,7 @@ def print_table_header() -> None:
     print(_HDR.format("-" * 10, "-" * 6, "-" * 8, "-" * 8, "-" * 8, "-" * 8, "-" * 12))
 
 
-def write_csv_row(writer, tool: str, model: str, variant: str, device: str, r: tuple) -> None:
+def write_csv_row(writer, tool: str, model: str, variant: str, device: str, perf_hint: str, r: tuple) -> None:
     if writer:
         writer.writerow(
             {
@@ -243,6 +251,7 @@ def write_csv_row(writer, tool: str, model: str, variant: str, device: str, r: t
                 "model": model,
                 "variant": variant,
                 "device": device,
+                "perf_hint": perf_hint,
                 "avg_ms": r[0],
                 "min_ms": r[1],
                 "p95_ms": r[2],
@@ -257,6 +266,7 @@ def write_csv_row(writer, tool: str, model: str, variant: str, device: str, r: t
 def main() -> None:
     args = parse_args()
     devices = [d.strip() for d in args.devices.split(",")]
+    perf_hints = [h.strip() for h in args.perf_hints.split(",")]
 
     if not COMPILED_DIR.exists() or not any(COMPILED_DIR.rglob("*.xml")):
         print("ERROR: tests/compiled_models/ not found or empty — run stage1 first")
@@ -276,6 +286,7 @@ def main() -> None:
                 "model",
                 "variant",
                 "device",
+                "perf_hint",
                 "avg_ms",
                 "min_ms",
                 "p95_ms",
@@ -288,18 +299,18 @@ def main() -> None:
         # ── benchmark_app ──────────────────────────────────────────────────────
         bench = find_benchmark_app()
         if bench:
-            header(f"Step 1: benchmark_app  (hint=throughput, {args.duration}s per run)")
-            print_table_header()
-            for zip_path, model, variant in models:
-                # benchmark_app reads the extracted IR (.xml), not the archive.
-                xml = zip_path.with_suffix(".xml")
-                for device in devices:
-                    r = run_benchmark_app(xml, device, args.duration)
-                    if r:
-                        print(_ROW.format(model, variant, device, *r))
-                        write_csv_row(csv_writer, "benchmark_app", model, variant, device, r)
-                    else:
-                        print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")
+            for hint in perf_hints:
+                header(f"Step 1: benchmark_app  (hint={hint}, {args.duration}s per run)")
+                print_table_header()
+                for zip_path, model, variant in models:
+                    xml = zip_path.with_suffix(".xml")
+                    for device in devices:
+                        r = run_benchmark_app(xml, device, args.duration, perf_hint=hint)
+                        if r:
+                            print(_ROW.format(model, variant, device, *r))
+                            write_csv_row(csv_writer, "benchmark_app", model, variant, device, hint, r)
+                        else:
+                            print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")
         else:
             print("benchmark_app not found — skipping")
 
@@ -307,27 +318,27 @@ def main() -> None:
             return
 
         # ── yolo_test ──────────────────────────────────────────────────────────
-        header(f"Step 2: yolo_test  (OAAX runtime, warmup={args.warmup}, runs={args.runs})")
-
         if not yolo_test_path().exists():
             print(f"  yolo_test not found at {yolo_test_path()}, building...")
             if not build_yolo_test():
                 print("  Build failed — skipping runtime tests")
                 sys.exit(1)
 
-        print_table_header()
         pass_count = fail_count = 0
-        for zip_path, model, variant in models:
-            batch = 4 if model.endswith("_b4") else 1
-            for device in devices:
-                r = run_yolo_test(zip_path, device, args.warmup, args.runs, batch=batch)
-                if r:
-                    print(_ROW.format(model, variant, device, *r))
-                    write_csv_row(csv_writer, "yolo_test", model, variant, device, r)
-                    pass_count += 1
-                else:
-                    print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")
-                    fail_count += 1
+        for hint in perf_hints:
+            header(f"Step 2: yolo_test  (OAAX runtime, hint={hint}, warmup={args.warmup}, runs={args.runs})")
+            print_table_header()
+            for zip_path, model, variant in models:
+                batch = 4 if model.endswith("_b4") else 1
+                for device in devices:
+                    r = run_yolo_test(zip_path, device, args.warmup, args.runs, batch=batch, perf_hint=hint)
+                    if r:
+                        print(_ROW.format(model, variant, device, *r))
+                        write_csv_row(csv_writer, "yolo_test", model, variant, device, hint, r)
+                        pass_count += 1
+                    else:
+                        print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")
+                        fail_count += 1
 
         header("Stage 2 results")
         if args.csv:
