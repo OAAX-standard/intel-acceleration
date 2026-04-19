@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Conversion Toolchain
+
+- **`batch_size` parameter:** `config.json` now accepts `advanced.batch_size` (default `1`).
+  For models without hardcoded internal batch constants (e.g. ResNet, MobileNet), the toolchain
+  uses a probe-then-reconvert approach (`ov.convert_model(..., input=input_specs)`) so the batch
+  dimension propagates through the full graph. YOLO models require re-export from PyTorch with the
+  target batch size (standard Ultralytics exports have hardcoded DFL reshape constants that prevent
+  post-hoc rebatching); attempting batch > 1 on a standard YOLO ONNX raises a clear `RuntimeError`
+  with a re-export hint.
+- **INT8 batch > 1 calibration fix:** `CalibrationDataLoader` now tiles each calibration sample to
+  match the model's fixed batch dimension (`np.repeat`) so NNCF receives correctly-shaped tensors.
+  Previously, INT8 quantization of a batch=4 model would immediately fail with a shape mismatch.
+
+### Testing
+
+- **Batch=4 CI pipeline** (`yolo11n_b4`, `yolo11s_b4`): YOLO models are re-exported from
+  PyTorch with `batch=4` and converted in FP32, FP16, and INT8 variants. 26 new integration
+  tests cover IR file presence, OpenVINO loading, output shape `[4, 84, 8400]`, numerical
+  sanity, and INT8 size regression.
+- **`multi_model_test`:** new C++ test binary that loads two models concurrently, enqueues
+  inputs to both, and validates that outputs from each model are correctly identified by
+  `model_id`. Exercises the OAAX v2 multi-model async dispatch path.
+- **C++ test build decoupled from runtime build:** test binaries (`simple_test`, `yolo_test`,
+  `multi_model_test`) now have their own `tests/runtime/CMakeLists.txt` and
+  `tests/runtime/build-tests.sh`, linking against the prebuilt `libRuntimeLibrary.so`.
+  The `runtime-library/` CMake no longer builds test executables.
+- **`stage2.py --perf-hints`:** accepts a comma-separated list of performance hints
+  (e.g. `latency,throughput`) and runs each section for all hint/device/model combinations.
+  Adds `perf_hint` column to CSV output.
+- **`stage2.py` benchmark_app timeout fix:** timeout changed from `duration * 4` to
+  `120 + duration * 4` to cover GPU JIT compilation overhead before measurement starts
+  (prevents false timeouts for batch=4 models on GPU with short `--duration` values).
+
+### CI
+
+- **Windows integration job simplified:** removed the OpenVINO install step from
+  `integration-tests-windows`; test binaries now link only against the downloaded
+  `RuntimeLibrary.lib` without needing the full OpenVINO SDK on the runner.
+
+---
+
 ## [2.0.0] - 2026-04-19
 
 ### Runtime Library — OAAX v2 Interface
