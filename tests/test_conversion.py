@@ -465,6 +465,128 @@ class TestErrorHandling:
             assert onnx_path is not None
 
 
+class TestBatchSize:
+    """Tests for the batch_size conversion parameter"""
+
+    BATCH_SIZE = 4
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp = tempfile.mkdtemp()
+        yield temp
+        shutil.rmtree(temp)
+
+    @pytest.fixture
+    def mobilenet_model(self):
+        models_dir = Path(__file__).parent / "test_models"
+        models_dir.mkdir(exist_ok=True)
+        model_path = download_model("mobilenetv2", str(models_dir))
+        if not Path(model_path).exists():
+            pytest.skip("MobileNetV2 not available")
+        return model_path
+
+    @pytest.fixture
+    def yolov8n_model(self):
+        models_dir = Path(__file__).parent / "test_models"
+        model_path = models_dir / "yolov8n.onnx"
+        if not model_path.exists():
+            pytest.skip("yolov8n.onnx not available")
+        return str(model_path)
+
+    def test_config_batch_size_default(self):
+        """Default batch_size is 1"""
+        config = OptimizationConfig.from_default()
+        assert config.get_batch_size() == 1
+
+    def test_config_batch_size_custom(self):
+        """batch_size is read from config dict"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        assert config.get_batch_size() == self.BATCH_SIZE
+
+    def test_config_batch_size_invalid(self):
+        """Zero and negative batch_size raise ValueError"""
+        for bad in (0, -1, -4):
+            with pytest.raises(ValueError, match="batch_size"):
+                OptimizationConfig({"advanced": {"batch_size": bad}})
+
+    def test_batch4_input_shape(self, mobilenet_model, temp_dir):
+        """Converted model has input batch dim == 4"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert (
+            model.inputs[0].shape[0] == self.BATCH_SIZE
+        ), f"Expected batch dim {self.BATCH_SIZE}, got {model.inputs[0].shape[0]}"
+
+    def test_batch4_output_shape(self, mobilenet_model, temp_dir):
+        """Converted model output also has batch dim == 4"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert model.outputs[0].shape[0] == self.BATCH_SIZE
+
+    def test_batch4_inference(self, mobilenet_model, temp_dir):
+        """Model converted with batch=4 runs inference on a batch of 4 images"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        core = ov.Core()
+        model = core.read_model(str(next(extract_dir.glob("*.xml"))))
+        compiled = core.compile_model(model, "CPU")
+
+        input_data = np.random.randn(self.BATCH_SIZE, 3, 224, 224).astype(np.float32)
+        result = compiled(input_data)[compiled.output(0)]
+
+        assert result.shape[0] == self.BATCH_SIZE
+        assert result.shape[1] == 1000  # ImageNet classes
+
+    def test_batch4_bundle_with_config(self, mobilenet_model, temp_dir):
+        """batch_size specified via config.json inside the zip bundle"""
+        bundle_path = Path(temp_dir) / "bundle.zip"
+        with zipfile.ZipFile(bundle_path, "w") as z:
+            z.write(mobilenet_model, arcname="model.onnx")
+            z.writestr("config.json", json.dumps({"advanced": {"batch_size": self.BATCH_SIZE}}))
+
+        logs = Logs()
+        with tempfile.TemporaryDirectory() as extract_dir:
+            onnx_path, config_path, _ = extract_input_bundle(str(bundle_path), extract_dir, logs)
+            config = OptimizationConfig.from_file(config_path)
+            assert config.get_batch_size() == self.BATCH_SIZE
+
+            zip_path = convert_to_ir(onnx_path, temp_dir, logs, config)
+
+        extract_dir2 = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir2)
+
+        model = ov.Core().read_model(str(next(extract_dir2.glob("*.xml"))))
+        assert model.inputs[0].shape[0] == self.BATCH_SIZE
+
+    def test_hardcoded_batch_error_message(self, yolov8n_model, temp_dir):
+        """YOLO models with hardcoded batch=1 raise a clear error"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        with pytest.raises(RuntimeError, match="batch_size=4"):
+            convert_to_ir(yolov8n_model, temp_dir, logs, config)
+
+
 class TestInvalidConfigurations:
     """Test error handling for invalid configurations"""
 
