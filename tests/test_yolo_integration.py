@@ -19,6 +19,7 @@ import pytest
 from tests.models import TEST_MODELS
 
 YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
+YOLO_MODELS_B4 = ["yolo11n_b4", "yolo11s_b4"]
 
 
 def _infer(xml: Path, model_name: str, img_value: float = 0.0) -> np.ndarray:
@@ -127,3 +128,55 @@ def test_int8_bin_smaller_than_fp32(compiled_yolo_models, model_name):
     assert (
         int8.stat().st_size < fp32.stat().st_size
     ), f"INT8 ({int8.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"
+
+
+# ── Batch=4 tests ─────────────────────────────────────────────────────────────
+
+
+def _get_b4(compiled_yolo_models_batch4, model_name, variant):
+    xml = compiled_yolo_models_batch4.get((model_name, variant))
+    if xml is None:
+        pytest.skip(f"{variant} batch=4 not available")
+    return xml
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
+@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+def test_b4_ir_files_exist(compiled_yolo_models_batch4, model_name, variant):
+    """Batch=4 compiled .xml and .bin files are present on disk."""
+    xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
+    assert xml.exists(), f"{xml} not found"
+    assert xml.with_suffix(".bin").exists(), f"{xml.with_suffix('.bin')} not found"
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
+@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+def test_b4_ir_loads_in_openvino(compiled_yolo_models_batch4, model_name, variant):
+    """Batch=4 IR is readable by OpenVINO Core with one input and one output."""
+    xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
+    model = ov.Core().read_model(str(xml))
+    assert len(model.inputs) == 1
+    assert len(model.outputs) == 1
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
+@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+def test_b4_output_shape(compiled_yolo_models_batch4, model_name, variant):
+    """Batch=4 inference output matches expected shape [4, 84, 8400]."""
+    xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
+    info = TEST_MODELS[model_name]
+    output = _infer(xml, model_name)
+    assert output.shape == (
+        4,
+        info["output_channels"],
+        info["output_anchors"],
+    ), f"Expected (4, {info['output_channels']}, {info['output_anchors']}), got {output.shape}"
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
+@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+def test_b4_output_is_finite(compiled_yolo_models_batch4, model_name, variant):
+    """Batch=4 inference output contains no NaN or Inf values."""
+    xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
+    output = _infer(xml, model_name)
+    assert np.all(np.isfinite(output)), f"{variant} batch=4 output has NaN/Inf"

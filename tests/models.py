@@ -16,6 +16,14 @@ from pathlib import Path
 
 COCO128_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
 
+# Maps model name → (ultralytics .pt name, export batch size)
+_YOLO_EXPORTS = {
+    "yolov8n": ("yolov8n.pt", 1),
+    "yolo11n": ("yolo11n.pt", 1),
+    "yolo11s": ("yolo11s.pt", 1),
+    "yolo11n_b4": ("yolo11n.pt", 4),
+    "yolo11s_b4": ("yolo11s.pt", 4),
+}
 
 TEST_MODELS = {
     "resnet18": {
@@ -61,6 +69,22 @@ TEST_MODELS = {
         "output_channels": 84,
         "output_anchors": 8400,
     },
+    "yolo11n_b4": {
+        "filename": "yolo11n_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 8400,
+    },
+    "yolo11s_b4": {
+        "filename": "yolo11s_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 8400,
+    },
 }
 
 
@@ -69,12 +93,15 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
     Export a YOLO model to ONNX using ultralytics.
 
     Args:
-        model_name: 'yolov8n' or 'yolo11n'
+        model_name: key from TEST_MODELS / _YOLO_EXPORTS (e.g. 'yolo11n', 'yolo11s_b4')
         output_dir: Directory to save the exported ONNX
 
     Returns:
         Path to the exported ONNX file
     """
+    if model_name not in _YOLO_EXPORTS:
+        raise ValueError(f"Unknown YOLO export model: {model_name}")
+
     try:
         from ultralytics import YOLO
     except ImportError as e:
@@ -89,12 +116,13 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
         print(f"✓ Model already exists: {dest}")
         return str(dest)
 
-    # Map our model names to ultralytics model IDs
-    ultralytics_name = {"yolov8n": "yolov8n.pt", "yolo11n": "yolo11n.pt", "yolo11s": "yolo11s.pt"}[model_name]
-
-    print(f"Exporting {model_name} to ONNX via ultralytics...")
+    ultralytics_name, batch = _YOLO_EXPORTS[model_name]
+    print(f"Exporting {model_name} to ONNX via ultralytics (batch={batch})...")
     model = YOLO(ultralytics_name)
-    exported = model.export(format="onnx", imgsz=640, opset=12, simplify=False)
+    export_kwargs = dict(format="onnx", imgsz=640, opset=12, simplify=False)
+    if batch > 1:
+        export_kwargs["batch"] = batch
+    exported = model.export(**export_kwargs)
     shutil.move(str(exported), str(dest))
     print(f"✓ Exported to: {dest}")
     return str(dest)
@@ -127,7 +155,7 @@ def download_model(model_name: str, output_dir: str = "test_models") -> str:
         return str(model_path)
 
     # YOLO models: export via ultralytics
-    if model_name in ("yolov8n", "yolo11n", "yolo11s"):
+    if model_name in _YOLO_EXPORTS:
         return export_yolo_model(model_name, output_dir)
 
     # Classification models: download from ONNX Model Zoo

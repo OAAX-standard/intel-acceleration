@@ -28,9 +28,7 @@ TEST_BUILD_DIR = ROOT / "tests" / "runtime" / "build"
 IS_WINDOWS = platform.system() == "Windows"
 
 # Match the models compiled by stage1 / test_yolo_integration.py.
-# Models outside this list (e.g. yolo11s left from earlier experiments) are
-# intentionally skipped — they are not part of the CI test matrix.
-YOLO_MODELS = {"yolov8n", "yolo11n", "yolo11s"}
+YOLO_MODELS = {"yolov8n", "yolo11n", "yolo11s", "yolo11n_b4", "yolo11s_b4"}
 
 
 def header(title: str) -> None:
@@ -121,6 +119,8 @@ def get_compiled_models() -> list[tuple[Path, str, str]]:
         for variant in ("FP32", "FP16", "INT8")
         for zip_path in sorted(COMPILED_DIR.glob(f"*/{variant}/*.zip"))
         if zip_path.stem in YOLO_MODELS
+        # b4 models are only compiled in FP32/FP16, not INT8
+        if not (zip_path.stem.endswith("_b4") and zip_path.parent.name == "INT8")
     ]
 
 
@@ -180,7 +180,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
     )
 
 
-def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int) -> tuple | None:
+def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
         print(f"  [error] yolo_test binary not found: {binary}")
@@ -188,8 +188,21 @@ def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int) -> tuple 
     env = os.environ.copy()
     if not IS_WINDOWS:
         env["LD_LIBRARY_PATH"] = f"{TEST_BUILD_DIR}:{env.get('LD_LIBRARY_PATH', '')}"
+    cmd = [
+        str(binary),
+        str(zip_path),
+        device,
+        "--warmup",
+        str(warmup),
+        "--runs",
+        str(runs),
+        "--perf-hint",
+        "throughput",
+    ]
+    if batch > 1:
+        cmd += ["--batch", str(batch)]
     text = run_process(
-        [str(binary), str(zip_path), device, "--warmup", str(warmup), "--runs", str(runs), "--perf-hint", "throughput"],
+        cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
         env=env,
         # 600s overhead covers cold model compilation (e.g. yolo11s ~3 min uncached).
@@ -306,8 +319,9 @@ def main() -> None:
         print_table_header()
         pass_count = fail_count = 0
         for zip_path, model, variant in models:
+            batch = 4 if model.endswith("_b4") else 1
             for device in devices:
-                r = run_yolo_test(zip_path, device, args.warmup, args.runs)
+                r = run_yolo_test(zip_path, device, args.warmup, args.runs, batch=batch)
                 if r:
                     print(_ROW.format(model, variant, device, *r))
                     write_csv_row(csv_writer, "yolo_test", model, variant, device, r)

@@ -25,7 +25,14 @@ def main() -> None:
 
     header("Step 2: YOLO integration tests (FP32 / FP16 / INT8)")
     subprocess.run(
-        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short"],
+        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "not b4"],
+        cwd=ROOT,
+        check=True,
+    )
+
+    header("Step 3: YOLO batch=4 integration tests (FP32 / FP16)")
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "b4"],
         cwd=ROOT,
         check=True,
     )
