@@ -21,7 +21,7 @@ class OptimizationConfig:
                 "subset_size": 300,
             },
         },
-        "advanced": {"input_shape": None, "input_names": None, "output_names": None},
+        "advanced": {"input_shape": None, "input_names": None, "output_names": None, "batch_size": 1},
     }
 
     def __init__(self, config_dict: dict[str, Any] | None = None):
@@ -89,6 +89,11 @@ class OptimizationConfig:
         if not isinstance(subset_size, int) or subset_size <= 0:
             raise ValueError(f"Invalid subset_size: {subset_size}. Must be a positive integer")
 
+        # Validate batch size
+        batch_size = self.get_batch_size()
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(f"Invalid batch_size: {batch_size}. Must be a positive integer")
+
     # Getters for configuration values
 
     def get_model_file(self) -> str:
@@ -118,6 +123,10 @@ class OptimizationConfig:
     def get_quantization_subset_size(self) -> int:
         """Get calibration subset size"""
         return self.config["optimization"]["quantization"]["subset_size"]
+
+    def get_batch_size(self) -> int:
+        """Get batch size (default 1)"""
+        return self.config["advanced"]["batch_size"]
 
     def get_input_shape(self) -> list | None:
         """Get input shape override"""

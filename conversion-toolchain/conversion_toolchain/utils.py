@@ -199,9 +199,37 @@ def convert_to_ir(
 
         logs.add_message("Converting ONNX model to OpenVINO IR format")
 
-        # Load and convert the ONNX model using OpenVINO
+        batch_size = config.get_batch_size()
+
+        # Load and convert the ONNX model using OpenVINO.
+        # For batch_size > 1 we probe the default conversion to get input names/shapes,
+        # then re-convert with explicit batch-sized inputs so the batch dim propagates
+        # through the entire graph (including internal Reshape constants that post-hoc
+        # reshape/set_batch cannot update).
         try:
-            model = ov.convert_model(onnx_path)
+            if batch_size == 1:
+                model = ov.convert_model(onnx_path)
+            else:
+                probe = ov.convert_model(onnx_path)
+                input_specs = []
+                for inp in probe.inputs:
+                    ps = inp.partial_shape
+                    new_shape = [batch_size] + [
+                        ps[i].get_length() if ps[i].is_static else -1 for i in range(1, len(ps))
+                    ]
+                    input_specs.append((inp.any_name, new_shape))
+                try:
+                    model = ov.convert_model(onnx_path, input=input_specs)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"batch_size={batch_size} conversion failed. "
+                        "The ONNX model likely has hardcoded batch=1 constants in its post-processing. "
+                        "Re-export the model from PyTorch with the desired batch size and try again. "
+                        f"Original error: {e}"
+                    ) from e
+                logs.add_message("Batch size set", {"batch_size": batch_size})
+        except RuntimeError:
+            raise
         except Exception as e:
             error_msg = f"Failed to convert ONNX model: {str(e)}"
             logs.add_message(

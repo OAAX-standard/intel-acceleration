@@ -107,6 +107,7 @@ def cli():
                 "Optimizations": {
                     "FP16 compression": config.get_fp16_compression(),
                     "INT8 quantization": config.is_quantization_enabled(),
+                    "Batch size": config.get_batch_size(),
                 },
             },
         )
