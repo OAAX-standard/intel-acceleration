@@ -143,7 +143,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
             RuntimeStatus st;
             do {
                 if (!ok) return;
-                st = runtime_retrieve_output(&model_id, &output, 5);
+                st = runtime_retrieve_output(&model_id, &output, 1);
             } while (st == RUNTIME_STATUS_NO_OUTPUT_AVAILABLE);
 
             if (st != RUNTIME_STATUS_SUCCESS) {
