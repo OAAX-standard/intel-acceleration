@@ -175,10 +175,12 @@ else()
   endif()
 endif()
 
-# Enable dispatch-pipeline profiling in debug builds (zero overhead in Release).
-if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+# Enable dispatch-pipeline profiling.
+# Automatically on for Debug; pass -DOAAX_PROFILE=ON to enable in other build types.
+option(OAAX_PROFILE "Enable per-stage inference profiling (adds log lines per request)" OFF)
+if(OAAX_PROFILE OR "${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
   target_compile_definitions(RuntimeLibrary PUBLIC OAAX_PROFILE=1)
-  message(STATUS "Debug build: OAAX_PROFILE=1 enabled")
+  message(STATUS "OAAX_PROFILE=1 enabled")
 endif()
 
 # === Include Directories ===

@@ -59,6 +59,20 @@ static inline int sem_timedwait_ms(sem_t *s, int ms) {
 #include "runtime_utils.hpp"
 #include "zip_utils.hpp"
 
+// ─── Profiling helpers ───────────────────────────────────────────────────────
+
+#ifdef OAAX_PROFILE
+using ProfNs = long long;
+static inline ProfNs prof_now_ns() {
+  return (ProfNs)std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+#define PROF_NOW() prof_now_ns()
+#else
+#define PROF_NOW() 0LL
+#endif
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 static void deep_free_tensors(Tensors *t) {
@@ -78,6 +92,12 @@ static void deep_free_tensors(Tensors *t) {
 
 struct SlotState {
   Tensors *input{nullptr};
+#ifdef OAAX_PROFILE
+  ProfNs t_enqueue_ns{0};  // when caller called runtime_enqueue_input
+  ProfNs t_dequeue_ns{0};  // when manager dequeued from input_queue
+  ProfNs t_slot_ns{0};     // when slot was acquired
+  ProfNs t_async_ns{0};    // just before start_async()
+#endif
 };
 
 struct ModelState {
@@ -87,6 +107,11 @@ struct ModelState {
   std::vector<SlotState> slot_states;
   moodycamel::ConcurrentQueue<Tensors *> input_queue;
   moodycamel::ConcurrentQueue<int> free_slots;
+#ifdef OAAX_PROFILE
+  // Mirrors input_queue — stores enqueue timestamp for each queued input
+  // (FIFO).
+  moodycamel::ConcurrentQueue<ProfNs> enqueue_times;
+#endif
   sem_t slot_sem;
   sem_t input_sem;
   std::thread manager_thread;
@@ -198,6 +223,9 @@ static void on_inference_complete(int model_id, int slot_idx,
   ModelState &m = *g_models[model_id];
   SlotState &s = m.slot_states[slot_idx];
   int request_id = s.input ? s.input->id : 0;
+#ifdef OAAX_PROFILE
+  ProfNs t_callback = PROF_NOW();
+#endif
 
   if (ex) {
     try {
@@ -214,6 +242,18 @@ static void on_inference_complete(int model_id, int slot_idx,
   }
 
   Tensors *output = build_output(model_id, slot_idx, request_id);
+#ifdef OAAX_PROFILE
+  ProfNs t_output_built = PROF_NOW();
+  auto ns2ms = [](ProfNs a, ProfNs b) { return (b - a) / 1e6; };
+  g_logger->info(
+      "[prof model={} slot={} req={}] "
+      "queue={:.3f}ms slot={:.3f}ms setup={:.3f}ms "
+      "infer={:.3f}ms build={:.3f}ms total={:.3f}ms",
+      model_id, slot_idx, request_id, ns2ms(s.t_enqueue_ns, s.t_dequeue_ns),
+      ns2ms(s.t_dequeue_ns, s.t_slot_ns), ns2ms(s.t_slot_ns, s.t_async_ns),
+      ns2ms(s.t_async_ns, t_callback), ns2ms(t_callback, t_output_built),
+      ns2ms(s.t_enqueue_ns, t_output_built));
+#endif
   deep_free_tensors(s.input);
   s.input = nullptr;
 
@@ -248,6 +288,12 @@ static void manager_loop(int model_id) {
     m.input_queue.try_dequeue(input);
     if (!input) continue;
 
+#ifdef OAAX_PROFILE
+    ProfNs t_dequeue = PROF_NOW();
+    ProfNs t_enqueue = 0;
+    m.enqueue_times.try_dequeue(t_enqueue);
+#endif
+
 #ifndef _WIN32
     while (sem_wait(&m.slot_sem) == -1 && errno == EINTR) continue;
 #else
@@ -261,6 +307,11 @@ static void manager_loop(int model_id) {
     int slot_idx = -1;
     m.free_slots.try_dequeue(slot_idx);
     m.slot_states[slot_idx].input = input;
+#ifdef OAAX_PROFILE
+    m.slot_states[slot_idx].t_enqueue_ns = t_enqueue;
+    m.slot_states[slot_idx].t_dequeue_ns = t_dequeue;
+    m.slot_states[slot_idx].t_slot_ns = PROF_NOW();
+#endif
 
     ov::InferRequest &req = m.infer_requests[slot_idx];
 
@@ -282,6 +333,9 @@ static void manager_loop(int model_id) {
       continue;
     }
 
+#ifdef OAAX_PROFILE
+    m.slot_states[slot_idx].t_async_ns = PROF_NOW();
+#endif
     g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
     req.start_async();
   }
@@ -569,7 +623,15 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
   }
 
   ModelState &m = *g_models[model_id];
+#ifdef OAAX_PROFILE
+  ProfNs t_enq = PROF_NOW();
+  m.enqueue_times.try_enqueue(t_enq);
+#endif
   if (!m.input_queue.try_enqueue(input_tensors)) {
+#ifdef OAAX_PROFILE
+    ProfNs dummy;
+    m.enqueue_times.try_dequeue(dummy);  // rollback timestamp
+#endif
     set_error("runtime_enqueue_input: input queue full");
     return RUNTIME_STATUS_ERROR;
   }
