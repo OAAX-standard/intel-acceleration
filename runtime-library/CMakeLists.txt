@@ -259,7 +259,7 @@ endif()
 # === Test Executables ===
 set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
 
-foreach(TEST_NAME simple_test yolo_test)
+foreach(TEST_NAME simple_test yolo_test multi_model_test)
   add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
   target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
   target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
