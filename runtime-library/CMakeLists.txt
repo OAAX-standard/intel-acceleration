@@ -255,21 +255,3 @@ else()
     VERBATIM
   )
 endif()
-
-# === Test Executables ===
-set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
-
-foreach(TEST_NAME simple_test yolo_test multi_model_test)
-  add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
-  target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
-  target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
-  target_link_libraries(${TEST_NAME} PRIVATE RuntimeLibrary)
-  if(NOT MSVC)
-    target_link_options(${TEST_NAME} PRIVATE "-Wl,--allow-shlib-undefined")
-  endif()
-  # Ensure test binary finds the shared libraries in the same directory at runtime
-  set_target_properties(${TEST_NAME} PROPERTIES
-    BUILD_RPATH "$ORIGIN"
-    INSTALL_RPATH "$ORIGIN"
-  )
-endforeach()

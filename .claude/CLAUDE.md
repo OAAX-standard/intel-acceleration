@@ -57,9 +57,11 @@ python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 python tests/benchmark_batch_sweep.py [--model yolov8n] [--device CPU] [--batches 1,2,4,8]
 # IR models cached in tests/compiled_models/_batch_sweep/ — re-runs skip export
 
-# C++ runtime tests (after building runtime)
-cd runtime-library/build && ./simple_test
-cd runtime-library/build && ./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
+# C++ runtime tests (build after running build-runtimes.sh)
+bash tests/runtime/build-tests.sh
+cd tests/runtime/build && ./simple_test
+cd tests/runtime/build && ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
+cd tests/runtime/build && ./multi_model_test <model.zip> [model2.zip]
 ```
 
 ---

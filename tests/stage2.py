@@ -23,7 +23,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 COMPILED_DIR = ROOT / "tests" / "compiled_models"
-BUILD_DIR = ROOT / "runtime-library" / "build"
+RUNTIME_BUILD_DIR = ROOT / "runtime-library" / "build"
+TEST_BUILD_DIR = ROOT / "tests" / "runtime" / "build"
 IS_WINDOWS = platform.system() == "Windows"
 
 # Match the models compiled by stage1 / test_yolo_integration.py.
@@ -68,50 +69,43 @@ def find_benchmark_app() -> Path | None:
 
 def yolo_test_path() -> Path:
     if IS_WINDOWS:
-        return BUILD_DIR / "Release" / "yolo_test.exe"
-    return BUILD_DIR / "yolo_test"
+        return TEST_BUILD_DIR / "Release" / "yolo_test.exe"
+    return TEST_BUILD_DIR / "yolo_test"
 
 
 # ── Build yolo_test ────────────────────────────────────────────────────────────
 
 
 def build_yolo_test() -> bool:
-    """Build yolo_test using cmake. Returns True on success."""
+    """Build yolo_test from tests/runtime/CMakeLists.txt. Returns True on success."""
     cmake = os.environ.get("CMAKE_BIN", shutil.which("cmake") or "cmake")
-    openvino_dir = os.environ.get("OPENVINO_DIR", "")
-    runtime_version = (ROOT / "VERSION").read_text().strip()
+    runtime_lib_dir = str(RUNTIME_BUILD_DIR / "Release") if IS_WINDOWS else str(RUNTIME_BUILD_DIR)
 
-    cmake_args = [
-        cmake,
-        "..",
-        f"-DRUNTIME_VERSION={runtime_version}",
-        f"-DOPENVINO_DIR={openvino_dir}",
-        "-DCMAKE_BUILD_TYPE=Release",
-    ]
-
-    if not IS_WINDOWS:
-        cmake_args.append("-DPLATFORM=X86_64")
-        # Create unversioned .so symlinks required by the linker
-        link_dir = BUILD_DIR / "openvino_links"
-        link_dir.mkdir(parents=True, exist_ok=True)
-        libs_dir = Path(openvino_dir) / "libs"
-        if not libs_dir.exists():
-            libs_dir = Path(openvino_dir) / "lib" / "intel64"
-        for lib in libs_dir.glob("*.so.*"):
-            stem = lib.name.split(".so")[0]
-            target = link_dir / f"{stem}.so"
-            if not target.exists():
-                target.symlink_to(lib)
-        cmake_args.append(f"-DOPENVINO_LINK_DIR={link_dir}")
-
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    TEST_BUILD_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(cmake_args, cwd=BUILD_DIR, check=True)
         subprocess.run(
-            [cmake, "--build", ".", "--config", "Release", "--target", "yolo_test", "-j", str(os.cpu_count() or 4)],
-            cwd=BUILD_DIR,
+            [cmake, "..", f"-DRUNTIME_LIB_DIR={runtime_lib_dir}", "-DCMAKE_BUILD_TYPE=Release"],
+            cwd=TEST_BUILD_DIR,
             check=True,
         )
+        subprocess.run(
+            [cmake, "--build", ".", "--config", "Release", "--target", "yolo_test", "-j", str(os.cpu_count() or 4)],
+            cwd=TEST_BUILD_DIR,
+            check=True,
+        )
+        # Make shared libs available alongside the test binary ($ORIGIN RPATH / Windows DLL search)
+        if IS_WINDOWS:
+            dst_dir = TEST_BUILD_DIR / "Release"
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for dll in (RUNTIME_BUILD_DIR / "Release").glob("*.dll"):
+                dst = dst_dir / dll.name
+                if not dst.exists():
+                    shutil.copy2(dll, dst)
+        else:
+            for so in RUNTIME_BUILD_DIR.glob("*.so*"):
+                dst = TEST_BUILD_DIR / so.name
+                if not dst.exists():
+                    dst.symlink_to(so)
         return True
     except subprocess.CalledProcessError as e:
         print(f"  Build failed: {e}")
@@ -193,7 +187,7 @@ def run_yolo_test(zip_path: Path, device: str, warmup: int, runs: int) -> tuple 
         return None
     env = os.environ.copy()
     if not IS_WINDOWS:
-        env["LD_LIBRARY_PATH"] = f"{BUILD_DIR}:{env.get('LD_LIBRARY_PATH', '')}"
+        env["LD_LIBRARY_PATH"] = f"{TEST_BUILD_DIR}:{env.get('LD_LIBRARY_PATH', '')}"
     text = run_process(
         [str(binary), str(zip_path), device, "--warmup", str(warmup), "--runs", str(runs), "--perf-hint", "throughput"],
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
