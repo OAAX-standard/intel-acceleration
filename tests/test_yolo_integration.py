@@ -141,7 +141,7 @@ def _get_b4(compiled_yolo_models_batch4, model_name, variant):
 
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
-@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_b4_ir_files_exist(compiled_yolo_models_batch4, model_name, variant):
     """Batch=4 compiled .xml and .bin files are present on disk."""
     xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
@@ -150,7 +150,7 @@ def test_b4_ir_files_exist(compiled_yolo_models_batch4, model_name, variant):
 
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
-@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_b4_ir_loads_in_openvino(compiled_yolo_models_batch4, model_name, variant):
     """Batch=4 IR is readable by OpenVINO Core with one input and one output."""
     xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
@@ -160,7 +160,7 @@ def test_b4_ir_loads_in_openvino(compiled_yolo_models_batch4, model_name, varian
 
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
-@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_b4_output_shape(compiled_yolo_models_batch4, model_name, variant):
     """Batch=4 inference output matches expected shape [4, 84, 8400]."""
     xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
@@ -174,9 +174,20 @@ def test_b4_output_shape(compiled_yolo_models_batch4, model_name, variant):
 
 
 @pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
-@pytest.mark.parametrize("variant", ["FP32", "FP16"])
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
 def test_b4_output_is_finite(compiled_yolo_models_batch4, model_name, variant):
     """Batch=4 inference output contains no NaN or Inf values."""
     xml = _get_b4(compiled_yolo_models_batch4, model_name, variant)
     output = _infer(xml, model_name)
     assert np.all(np.isfinite(output)), f"{variant} batch=4 output has NaN/Inf"
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_B4)
+def test_b4_int8_bin_smaller_than_fp32(compiled_yolo_models_batch4, model_name):
+    """Batch=4 INT8 .bin is smaller than FP32 .bin."""
+    fp32 = compiled_yolo_models_batch4[(model_name, "FP32")].with_suffix(".bin")
+    int8_xml = _get_b4(compiled_yolo_models_batch4, model_name, "INT8")
+    int8 = int8_xml.with_suffix(".bin")
+    assert (
+        int8.stat().st_size < fp32.stat().st_size
+    ), f"INT8 ({int8.stat().st_size} B) not smaller than FP32 ({fp32.stat().st_size} B)"

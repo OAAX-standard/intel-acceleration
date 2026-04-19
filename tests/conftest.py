@@ -32,10 +32,15 @@ _CONFIGS = {
     },
 }
 
-# Batch=4 variants: FP32 and FP16 only (INT8 calibration uses batch=1 internally)
 _CONFIGS_B4 = {
     "FP32": {"optimization": {"fp16_compression": False}},
     "FP16": {"optimization": {"fp16_compression": True}},
+    "INT8": {
+        "optimization": {
+            "fp16_compression": False,
+            "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
+        }
+    },
 }
 
 
@@ -175,7 +180,7 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_batch4() -> dict:
+def compiled_yolo_models_batch4(calibration_dir: Path) -> dict:
     """
     Export yolo11n and yolo11s with batch=4, then convert (FP32/FP16) via
     the Docker toolchain image, caching to tests/compiled_models/.
@@ -215,7 +220,7 @@ def compiled_yolo_models_batch4() -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                None,
+                calibration_dir if variant == "INT8" else None,
             )
             result[(model_name, variant)] = xml
 

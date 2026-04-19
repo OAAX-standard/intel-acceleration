@@ -30,7 +30,7 @@ def main() -> None:
         check=True,
     )
 
-    header("Step 3: YOLO batch=4 integration tests (FP32 / FP16)")
+    header("Step 3: YOLO batch=4 integration tests (FP32 / FP16 / INT8)")
     subprocess.run(
         [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "b4"],
         cwd=ROOT,

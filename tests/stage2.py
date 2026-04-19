@@ -119,8 +119,6 @@ def get_compiled_models() -> list[tuple[Path, str, str]]:
         for variant in ("FP32", "FP16", "INT8")
         for zip_path in sorted(COMPILED_DIR.glob(f"*/{variant}/*.zip"))
         if zip_path.stem in YOLO_MODELS
-        # b4 models are only compiled in FP32/FP16, not INT8
-        if not (zip_path.stem.endswith("_b4") and zip_path.parent.name == "INT8")
     ]
 
 
@@ -168,7 +166,8 @@ def run_benchmark_app(xml: Path, device: str, duration: int) -> tuple | None:
             "-t",
             str(duration),
         ],
-        timeout=duration * 4,
+        # 120s base covers GPU JIT compilation before measurement starts.
+        timeout=120 + duration * 4,
     )
     if not text:
         return None

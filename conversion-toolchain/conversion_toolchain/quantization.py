@@ -92,8 +92,13 @@ class CalibrationDataLoader:
         # Convert HWC to CHW (Height, Width, Channels -> Channels, Height, Width)
         img_array = np.transpose(img_array, (2, 0, 1))
 
-        # Add batch dimension
+        # Add batch dimension; tile to match model's fixed batch size if > 1
         img_array = np.expand_dims(img_array, axis=0)
+        batch_size = (
+            self.input_shape[0] if self.input_shape and len(self.input_shape) == 4 and self.input_shape[0] > 1 else 1
+        )
+        if batch_size > 1:
+            img_array = np.repeat(img_array, batch_size, axis=0)
 
         return img_array
 
