@@ -12,28 +12,28 @@
 struct sem_t {
   HANDLE h;
 };
-static inline int sem_init(sem_t *s, int, unsigned int value) {
+static inline int sem_init(sem_t* s, int, unsigned int value) {
   s->h = CreateSemaphoreW(nullptr, (LONG)value, 0x7FFFFFFF, nullptr);
   return s->h ? 0 : -1;
 }
-static inline int sem_wait(sem_t *s) {
+static inline int sem_wait(sem_t* s) {
   return WaitForSingleObject(s->h, INFINITE) == WAIT_OBJECT_0 ? 0 : -1;
 }
-static inline int sem_trywait(sem_t *s) {
+static inline int sem_trywait(sem_t* s) {
   return WaitForSingleObject(s->h, 0) == WAIT_OBJECT_0 ? 0 : -1;
 }
-static inline int sem_timedwait_ms(sem_t *s, int ms) {
+static inline int sem_timedwait_ms(sem_t* s, int ms) {
   return WaitForSingleObject(s->h, (DWORD)ms) == WAIT_OBJECT_0 ? 0 : -1;
 }
-static inline int sem_post(sem_t *s) {
+static inline int sem_post(sem_t* s) {
   return ReleaseSemaphore(s->h, 1, nullptr) ? 0 : -1;
 }
-static inline int sem_destroy(sem_t *s) { return CloseHandle(s->h) ? 0 : -1; }
+static inline int sem_destroy(sem_t* s) { return CloseHandle(s->h) ? 0 : -1; }
 #else
 #include <errno.h>
 #include <semaphore.h>
 #include <time.h>
-static inline int sem_timedwait_ms(sem_t *s, int ms) {
+static inline int sem_timedwait_ms(sem_t* s, int ms) {
   struct timespec deadline;
   clock_gettime(CLOCK_REALTIME, &deadline);
   deadline.tv_sec += ms / 1000;
@@ -75,7 +75,7 @@ static inline ProfNs prof_now_ns() {
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
-static void deep_free_tensors(Tensors *t) {
+static void deep_free_tensors(Tensors* t) {
   if (!t) return;
   if (t->tensors) {
     for (int i = 0; i < t->num_tensors; ++i) {
@@ -91,7 +91,7 @@ static void deep_free_tensors(Tensors *t) {
 // ─── Per-model state ─────────────────────────────────────────────────────────
 
 struct SlotState {
-  Tensors *input{nullptr};
+  Tensors* input{nullptr};
 #ifdef OAAX_PROFILE
   ProfNs t_enqueue_ns{0};   // when caller called runtime_enqueue_input
   ProfNs t_dispatch_ns{0};  // when dispatch_to_slot() was entered
@@ -104,7 +104,7 @@ struct ModelState {
   ov::CompiledModel compiled_model;
   std::vector<ov::InferRequest> infer_requests;
   std::vector<SlotState> slot_states;
-  moodycamel::ConcurrentQueue<Tensors *> input_queue;
+  moodycamel::ConcurrentQueue<Tensors*> input_queue;
   moodycamel::ConcurrentQueue<int> free_slots;
 #ifdef OAAX_PROFILE
   // Mirrors input_queue — stores enqueue timestamp for each queued input
@@ -122,14 +122,14 @@ struct ModelState {
 
 struct OutputItem {
   int model_id;
-  Tensors *tensors;
+  Tensors* tensors;
 };
 
 // ─── Global state
 // ─────────────────────────────────────────────────────────────
 
 static std::shared_ptr<ov::Core> g_core;
-static std::vector<ModelState *> g_models;
+static std::vector<ModelState*> g_models;
 static std::atomic<bool> g_initialized{false};
 static std::atomic<bool> g_models_loaded{false};
 
@@ -151,15 +151,15 @@ static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
 
-static std::string config_get(const Config &cfg, const char *key,
-                              const std::string &fallback) {
+static std::string config_get(const Config& cfg, const char* key,
+                              const std::string& fallback) {
   for (int i = 0; i < cfg.length; ++i)
     if (cfg.keys[i] && strcmp(cfg.keys[i], key) == 0)
       return cfg.values[i] ? cfg.values[i] : fallback;
   return fallback;
 }
 
-static void set_error(const std::string &msg) {
+static void set_error(const std::string& msg) {
   g_last_error = msg;
   if (g_logger) g_logger->error("{}", msg);
 }
@@ -182,17 +182,17 @@ static bool wait_for_output(int timeout_ms) {
 
 // ─── Output builder ──────────────────────────────────────────────────────────
 
-static Tensors *build_output(int model_id, int slot_idx, int request_id) {
-  ModelState &m = *g_models[model_id];
-  ov::InferRequest &req = m.infer_requests[slot_idx];
+static Tensors* build_output(int model_id, int slot_idx, int request_id) {
+  ModelState& m = *g_models[model_id];
+  ov::InferRequest& req = m.infer_requests[slot_idx];
   int n = (int)m.output_names.size();
 
-  Tensors *out = (Tensors *)malloc(sizeof(Tensors));
+  Tensors* out = (Tensors*)malloc(sizeof(Tensors));
   if (!out) return nullptr;
   out->id = request_id;
   out->num_tensors = n;
   out->tensors =
-      (TensorDescriptor *)malloc((size_t)n * sizeof(TensorDescriptor));
+      (TensorDescriptor*)malloc((size_t)n * sizeof(TensorDescriptor));
   if (!out->tensors) {
     free(out);
     return nullptr;
@@ -205,7 +205,7 @@ static Tensors *build_output(int model_id, int slot_idx, int request_id) {
     out->tensors[i].name = strdup(m.output_names[i].c_str());
     out->tensors[i].data_type = map_from_ov_type(t.get_element_type());
     out->tensors[i].rank = (int)shape.size();
-    out->tensors[i].shape = (int *)malloc(shape.size() * sizeof(int));
+    out->tensors[i].shape = (int*)malloc(shape.size() * sizeof(int));
     for (size_t j = 0; j < shape.size(); ++j)
       out->tensors[i].shape[j] = (int)shape[j];
     out->tensors[i].data_size = t.get_byte_size();
@@ -220,9 +220,9 @@ static Tensors *build_output(int model_id, int slot_idx, int request_id) {
 // Takes ownership of `input`; on tensor-setup failure frees it and returns the
 // slot to free_slots so the pipeline stays live.
 
-static void dispatch_to_slot(int model_id, int slot_idx, Tensors *input) {
-  ModelState &m = *g_models[model_id];
-  SlotState &s = m.slot_states[slot_idx];
+static void dispatch_to_slot(int model_id, int slot_idx, Tensors* input) {
+  ModelState& m = *g_models[model_id];
+  SlotState& s = m.slot_states[slot_idx];
   s.input = input;
 
 #ifdef OAAX_PROFILE
@@ -232,16 +232,16 @@ static void dispatch_to_slot(int model_id, int slot_idx, Tensors *input) {
   s.t_dispatch_ns = PROF_NOW();
 #endif
 
-  ov::InferRequest &req = m.infer_requests[slot_idx];
+  ov::InferRequest& req = m.infer_requests[slot_idx];
   try {
     for (int i = 0; i < input->num_tensors; ++i) {
-      TensorDescriptor &td = input->tensors[i];
+      TensorDescriptor& td = input->tensors[i];
       ov::Shape shape;
       for (int j = 0; j < td.rank; ++j) shape.push_back((size_t)td.shape[j]);
       req.set_tensor(td.name,
                      ov::Tensor(map_to_ov_type(td.data_type), shape, td.data));
     }
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     g_logger->error("[model {} slot {}] Tensor setup failed: {}", model_id,
                     slot_idx, e.what());
     deep_free_tensors(input);
@@ -261,8 +261,8 @@ static void dispatch_to_slot(int model_id, int slot_idx, Tensors *input) {
 
 static void on_inference_complete(int model_id, int slot_idx,
                                   std::exception_ptr ex) {
-  ModelState &m = *g_models[model_id];
-  SlotState &s = m.slot_states[slot_idx];
+  ModelState& m = *g_models[model_id];
+  SlotState& s = m.slot_states[slot_idx];
   int request_id = s.input ? s.input->id : 0;
 #ifdef OAAX_PROFILE
   ProfNs t_callback = PROF_NOW();
@@ -271,7 +271,7 @@ static void on_inference_complete(int model_id, int slot_idx,
   if (ex) {
     try {
       std::rethrow_exception(ex);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
       g_logger->error("[model {} slot {}] Inference error: {}", model_id,
                       slot_idx, e.what());
     }
@@ -281,7 +281,7 @@ static void on_inference_complete(int model_id, int slot_idx,
     return;
   }
 
-  Tensors *output = build_output(model_id, slot_idx, request_id);
+  Tensors* output = build_output(model_id, slot_idx, request_id);
 #ifdef OAAX_PROFILE
   ProfNs t_output_built = PROF_NOW();
   auto ns2ms = [](ProfNs a, ProfNs b) { return (b - a) / 1e6; };
@@ -298,7 +298,7 @@ static void on_inference_complete(int model_id, int slot_idx,
 
   // Hot path: immediately reload this slot if input is waiting — zero GPU idle.
   // Cold path: slot goes idle; manager will pair it with the next enqueue call.
-  Tensors *next = nullptr;
+  Tensors* next = nullptr;
   if (!m.stop && m.input_queue.try_dequeue(next)) {
     dispatch_to_slot(model_id, slot_idx, next);
   } else {
@@ -321,7 +321,7 @@ static void on_inference_complete(int model_id, int slot_idx,
 // This thread only runs when all slots went idle and new input arrives later.
 
 static void manager_loop(int model_id) {
-  ModelState &m = *g_models[model_id];
+  ModelState& m = *g_models[model_id];
 
   while (true) {
 #ifndef _WIN32
@@ -338,7 +338,7 @@ static void manager_loop(int model_id) {
     int slot_idx = -1;
     if (!m.free_slots.try_dequeue(slot_idx)) continue;
 
-    Tensors *input = nullptr;
+    Tensors* input = nullptr;
     if (!m.input_queue.try_dequeue(input)) {
       m.free_slots.enqueue(slot_idx);  // put slot back
       continue;
@@ -351,11 +351,11 @@ static void manager_loop(int model_id) {
 // ─── Device resolution
 // ────────────────────────────────────────────────────────
 
-static std::string resolve_device(const std::string &requested) {
+static std::string resolve_device(const std::string& requested) {
   if (requested != "GPU") return requested;
   std::vector<std::string> gpus;
   try {
-    for (const auto &d : g_core->get_available_devices())
+    for (const auto& d : g_core->get_available_devices())
       if (d.rfind("GPU", 0) == 0) gpus.push_back(d);
   } catch (...) {
   }
@@ -369,7 +369,7 @@ static std::string resolve_device(const std::string &requested) {
   return multi;
 }
 
-static ov::AnyMap build_perf_config(const std::string &hint) {
+static ov::AnyMap build_perf_config(const std::string& hint) {
   ov::AnyMap cfg;
   if (hint == "throughput")
     cfg[ov::hint::performance_mode.name()] =
@@ -388,7 +388,7 @@ static void log_available_devices() {
   try {
     auto devices = g_core->get_available_devices();
     g_logger->info("Available devices ({}):", devices.size());
-    for (const auto &dev : devices) {
+    for (const auto& dev : devices) {
       std::string full = dev;
       try {
         full = g_core->get_property(dev, ov::device::full_name);
@@ -396,9 +396,9 @@ static void log_available_devices() {
       }
       std::string prec;
       try {
-        for (const auto &cap :
+        for (const auto& cap :
              g_core->get_property(dev, ov::device::capabilities))
-          for (const auto &p : kPrec)
+          for (const auto& p : kPrec)
             if (cap == p) {
               if (!prec.empty()) prec += ", ";
               prec += cap;
@@ -408,7 +408,7 @@ static void log_available_devices() {
       if (prec.empty()) prec = "(unknown)";
       g_logger->info("  {} — {} — {}", dev, full, prec);
     }
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     g_logger->warn("Device enumeration failed: {}", e.what());
   }
 }
@@ -480,7 +480,7 @@ RuntimeStatus runtime_init(Config config) {
     log_available_devices();
     g_initialized = true;
     return RUNTIME_STATUS_SUCCESS;
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     g_last_error = e.what();
     if (g_logger) g_logger->error("runtime_init failed: {}", g_last_error);
     return RUNTIME_STATUS_ERROR;
@@ -488,7 +488,7 @@ RuntimeStatus runtime_init(Config config) {
 }
 
 RuntimeStatus runtime_load_models(int num_models,
-                                  const ModelConfig *model_configs) {
+                                  const ModelConfig* model_configs) {
   if (!g_initialized) {
     g_last_error = "runtime_load_models: runtime not initialized";
     return RUNTIME_STATUS_NOT_INITIALIZED;
@@ -507,7 +507,7 @@ RuntimeStatus runtime_load_models(int num_models,
 
   // Load each model; on any failure clean up already-created models
   for (int m_idx = 0; m_idx < num_models; ++m_idx) {
-    const ModelConfig &mc = model_configs[m_idx];
+    const ModelConfig& mc = model_configs[m_idx];
     if (!mc.file_path) {
       set_error("model_configs[" + std::to_string(m_idx) +
                 "].file_path is null");
@@ -534,6 +534,27 @@ RuntimeStatus runtime_load_models(int num_models,
 
       auto model = g_core->read_model(xml_path);
 
+      // Optional input dtype preprocessing (e.g. "u8" for INT8 models)
+      std::string input_dtype_str = config_get(mc.config, "input_dtype", "f32");
+      if (input_dtype_str != "f32") {
+        ov::element::Type caller_type = ov::element::dynamic;
+        if (input_dtype_str == "u8")
+          caller_type = ov::element::u8;
+        else if (input_dtype_str == "f16")
+          caller_type = ov::element::f16;
+        if (!caller_type.is_dynamic()) {
+          ov::preprocess::PrePostProcessor ppp(model);
+          for (size_t i = 0; i < model->inputs().size(); ++i) {
+            auto model_type = model->input(i).get_element_type();
+            ppp.input(i).tensor().set_element_type(caller_type);
+            ppp.input(i).preprocess().convert_element_type(model_type);
+          }
+          model = ppp.build();
+          g_logger->info("[model {}] Input dtype: {} (converted to model type)",
+                         m_idx, input_dtype_str);
+        }
+      }
+
       std::string eff_device = resolve_device(device);
       auto perf_cfg = build_perf_config(hint);
 
@@ -543,7 +564,7 @@ RuntimeStatus runtime_load_models(int num_models,
       ov::CompiledModel compiled;
       try {
         compiled = g_core->compile_model(model, eff_device, perf_cfg);
-      } catch (const std::exception &e) {
+      } catch (const std::exception& e) {
         if (device != "CPU") {
           g_logger->warn(
               "[model {}] Compile on {} failed ({}), falling back to CPU",
@@ -570,15 +591,15 @@ RuntimeStatus runtime_load_models(int num_models,
         n_req = forced_nreq;
       }
 
-      ModelState *ms = new ModelState();
+      ModelState* ms = new ModelState();
       ms->id = m_idx;
       ms->compiled_model = std::move(compiled);
       ms->effective_device = eff_device;
       ms->temp_dir = temp_dir;
 
-      for (const auto &inp : ms->compiled_model.inputs())
+      for (const auto& inp : ms->compiled_model.inputs())
         ms->input_names.push_back(inp.get_any_name());
-      for (const auto &out : ms->compiled_model.outputs())
+      for (const auto& out : ms->compiled_model.outputs())
         ms->output_names.push_back(out.get_any_name());
 
       for (int i = 0; i < n_req; ++i)
@@ -603,7 +624,7 @@ RuntimeStatus runtime_load_models(int num_models,
       g_logger->info("[model {}] Ready ({} slots, device={})", m_idx, n_req,
                      eff_device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
       set_error(std::string("Failed to load model ") + std::to_string(m_idx) +
                 ": " + e.what());
       goto fail;
@@ -615,12 +636,12 @@ RuntimeStatus runtime_load_models(int num_models,
 
 fail:
   // Stop and clean up all models created so far
-  for (auto *ms : g_models) {
+  for (auto* ms : g_models) {
     ms->stop = true;
     sem_post(&ms->input_sem);
     if (ms->manager_thread.joinable()) ms->manager_thread.join();
-    for (auto &req : ms->infer_requests) req.wait();
-    Tensors *t;
+    for (auto& req : ms->infer_requests) req.wait();
+    Tensors* t;
     while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
     sem_destroy(&ms->input_sem);
     cleanup_temp_dir(ms->temp_dir);
@@ -634,7 +655,7 @@ fail:
   return RUNTIME_STATUS_ERROR;
 }
 
-RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
+RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   if (!g_initialized) return RUNTIME_STATUS_NOT_INITIALIZED;
   if (!g_models_loaded) return RUNTIME_STATUS_MODEL_NOT_LOADED;
   if (model_id < 0 || model_id >= (int)g_models.size())
@@ -644,7 +665,7 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
     return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
 
-  ModelState &m = *g_models[model_id];
+  ModelState& m = *g_models[model_id];
 
 #ifdef OAAX_PROFILE
   m.enqueue_times.try_enqueue(PROF_NOW());
@@ -675,7 +696,7 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
   return RUNTIME_STATUS_SUCCESS;
 }
 
-RuntimeStatus runtime_retrieve_output(int *model_id, Tensors **output_tensors,
+RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
                                       int timeout_ms) {
   if (!g_initialized) return RUNTIME_STATUS_NOT_INITIALIZED;
   if (!model_id || !output_tensors) {
@@ -704,16 +725,16 @@ RuntimeStatus runtime_cleanup(void) {
   g_logger->info("Cleaning up runtime...");
 
   // Stop all manager threads and wait for in-flight requests
-  for (auto *ms : g_models) {
+  for (auto* ms : g_models) {
     ms->stop = true;
     sem_post(&ms->input_sem);
     if (ms->manager_thread.joinable()) ms->manager_thread.join();
-    for (auto &req : ms->infer_requests) req.wait();
+    for (auto& req : ms->infer_requests) req.wait();
   }
 
   // Drain input queues and destroy per-model resources
-  for (auto *ms : g_models) {
-    Tensors *t;
+  for (auto* ms : g_models) {
+    Tensors* t;
     while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
     sem_destroy(&ms->input_sem);
     ms->infer_requests.clear();
@@ -739,21 +760,21 @@ RuntimeStatus runtime_cleanup(void) {
   return RUNTIME_STATUS_SUCCESS;
 }
 
-const char *runtime_get_error(void) {
+const char* runtime_get_error(void) {
   return g_last_error.empty() ? nullptr : g_last_error.c_str();
 }
 
-const char *runtime_get_version(void) { return RUNTIME_VERSION; }
+const char* runtime_get_version(void) { return RUNTIME_VERSION; }
 
-const char *runtime_get_name(void) {
+const char* runtime_get_name(void) {
   return "OAAX Intel Runtime (OpenVINO Native)";
 }
 
-const char *runtime_get_info(void) {
+const char* runtime_get_info(void) {
   if (!g_initialized) return nullptr;
 
   int in_flight = 0;
-  for (const auto *ms : g_models)
+  for (const auto* ms : g_models)
     in_flight += (int)ms->input_queue.size_approx();
 
   std::string bv;
