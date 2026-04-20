@@ -146,6 +146,7 @@ static std::string g_log_file = "runtime.log";
 static std::string g_device_type = "CPU";
 static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
+static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -429,6 +430,12 @@ RuntimeStatus runtime_init(Config config) {
   g_log_file = config_get(config, "log_file", "runtime.log");
   g_device_type = config_get(config, "device_type", "CPU");
   g_cache_dir = config_get(config, "cache_dir", ".");
+  try {
+    g_num_requests = std::stoi(config_get(config, "num_requests", "0"));
+    if (g_num_requests < 0) g_num_requests = 0;
+  } catch (...) {
+    g_num_requests = 0;
+  }
   std::string hint = config_get(config, "perf_hint", "latency");
   if (hint == "latency" || hint == "throughput" ||
       hint == "cumulative_throughput")
@@ -550,6 +557,18 @@ RuntimeStatus runtime_load_models(int num_models,
 
       int n_req = compiled.get_property(ov::optimal_number_of_infer_requests);
       g_logger->info("[model {}] Optimal infer requests: {}", m_idx, n_req);
+      int forced_nreq = 0;
+      try {
+        forced_nreq = std::stoi(config_get(
+            mc.config, "num_requests",
+            g_num_requests > 0 ? std::to_string(g_num_requests) : "0"));
+      } catch (...) {
+      }
+      if (forced_nreq > 0) {
+        g_logger->info("[model {}] num_requests overridden: {} → {}", m_idx,
+                       n_req, forced_nreq);
+        n_req = forced_nreq;
+      }
 
       ModelState *ms = new ModelState();
       ms->id = m_idx;

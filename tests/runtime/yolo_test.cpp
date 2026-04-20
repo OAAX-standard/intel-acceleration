@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0]
                   << " <model.zip> [device] [--runs N] [--warmup N] [--batch N]"
-                     " [--perf-hint latency|throughput]"
+                     " [--perf-hint latency|throughput] [--nireq N]"
                   << std::endl;
         return 1;
     }
@@ -184,6 +184,7 @@ int main(int argc, char **argv) {
     int runs = 30;
     int warmup = 5;
     int batch = 1;
+    int nireq = 0;  // 0 = use runtime default (optimal)
 
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc)
@@ -194,6 +195,8 @@ int main(int argc, char **argv) {
             batch = atoi(argv[++i]);
         else if (strcmp(argv[i], "--perf-hint") == 0 && i + 1 < argc)
             perf_hint = argv[++i];
+        else if (strcmp(argv[i], "--nireq") == 0 && i + 1 < argc)
+            nireq = atoi(argv[++i]);
         else
             device = argv[i];
     }
@@ -203,14 +206,16 @@ int main(int argc, char **argv) {
     std::cout << "Device    : " << device << std::endl;
     std::cout << "Perf hint : " << perf_hint << std::endl;
     std::cout << "Batch     : " << batch << std::endl;
+    std::cout << "nireq     : " << (nireq > 0 ? std::to_string(nireq) : "auto") << std::endl;
     std::cout << "Warmup    : " << warmup << " runs" << std::endl;
     std::cout << "Runs      : " << runs << std::endl << std::endl;
 
     // ── 1. Init ───────────────────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
-    const char *init_keys[] = {"device_type", "perf_hint", "log_level"};
-    const char *init_vals[] = {device, perf_hint, "2"};
-    Config init_cfg = {3, init_keys, init_vals};
+    std::string nireq_str = std::to_string(nireq);
+    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests"};
+    const char *init_vals[] = {device, perf_hint, "2", nireq_str.c_str()};
+    Config init_cfg = {4, init_keys, init_vals};
     CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
     std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;
 
