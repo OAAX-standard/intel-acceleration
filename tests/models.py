@@ -16,13 +16,17 @@ from pathlib import Path
 
 COCO128_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
 
-# Maps model name → (ultralytics .pt name, export batch size)
+# Maps model name → (ultralytics .pt name, export batch size, imgsz)
 _YOLO_EXPORTS = {
-    "yolov8n": ("yolov8n.pt", 1),
-    "yolo11n": ("yolo11n.pt", 1),
-    "yolo11s": ("yolo11s.pt", 1),
-    "yolo11n_b4": ("yolo11n.pt", 4),
-    "yolo11s_b4": ("yolo11s.pt", 4),
+    "yolov8n": ("yolov8n.pt", 1, 640),
+    "yolo11n": ("yolo11n.pt", 1, 640),
+    "yolo11s": ("yolo11s.pt", 1, 640),
+    "yolo11n_b4": ("yolo11n.pt", 4, 640),
+    "yolo11s_b4": ("yolo11s.pt", 4, 640),
+    "yolo11n_320": ("yolo11n.pt", 1, 320),
+    "yolo11s_320": ("yolo11s.pt", 1, 320),
+    "yolo11n_320_b4": ("yolo11n.pt", 4, 320),
+    "yolo11s_320_b4": ("yolo11s.pt", 4, 320),
 }
 
 TEST_MODELS = {
@@ -85,6 +89,38 @@ TEST_MODELS = {
         "output_channels": 84,
         "output_anchors": 8400,
     },
+    "yolo11n_320": {
+        "filename": "yolo11n_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,  # 10x10 + 20x20 + 40x40
+    },
+    "yolo11s_320": {
+        "filename": "yolo11s_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
+    "yolo11n_320_b4": {
+        "filename": "yolo11n_320_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
+    "yolo11s_320_b4": {
+        "filename": "yolo11s_320_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
 }
 
 
@@ -116,10 +152,10 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
         print(f"✓ Model already exists: {dest}")
         return str(dest)
 
-    ultralytics_name, batch = _YOLO_EXPORTS[model_name]
-    print(f"Exporting {model_name} to ONNX via ultralytics (batch={batch})...")
+    ultralytics_name, batch, imgsz = _YOLO_EXPORTS[model_name]
+    print(f"Exporting {model_name} to ONNX via ultralytics (batch={batch}, imgsz={imgsz})...")
     model = YOLO(ultralytics_name)
-    export_kwargs = dict(format="onnx", imgsz=640, opset=12, simplify=False)
+    export_kwargs = dict(format="onnx", imgsz=imgsz, opset=12, simplify=False)
     if batch > 1:
         export_kwargs["batch"] = batch
     exported = model.export(**export_kwargs)

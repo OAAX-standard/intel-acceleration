@@ -5,8 +5,9 @@
  *
  * Usage:
  *   ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
- *               [--perf-hint latency|throughput]
- * Defaults: device=CPU, runs=30, warmup=5, batch=1
+ *               [--perf-hint latency|throughput] [--input-dtype f32|u8|f16]
+ *               [--in-flight N] [--imgsz N]
+ * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=5, imgsz=640
  */
 
 #include <algorithm>
@@ -23,10 +24,24 @@
 #include "oaax_runtime.h"
 
 static const int YOLO_CHANNELS = 3;
-static const int YOLO_HEIGHT = 640;
-static const int YOLO_WIDTH = 640;
-static const int YOLO_OUT_CH = 84;
-static const int YOLO_ANCHORS = 8400;
+static const int YOLO_OUT_CH = 84;  // 4 bbox + 80 COCO classes, resolution-independent
+
+static size_t dtype_byte_size(TensorElementType dtype) {
+    switch (dtype) {
+        case DATA_TYPE_UINT8:
+            return 1;
+        case DATA_TYPE_FLOAT16:
+            return 2;
+        default:
+            return 4;  // f32
+    }
+}
+
+static TensorElementType parse_input_dtype(const char *s) {
+    if (strcmp(s, "u8") == 0 || strcmp(s, "uint8") == 0) return DATA_TYPE_UINT8;
+    if (strcmp(s, "f16") == 0 || strcmp(s, "float16") == 0) return DATA_TYPE_FLOAT16;
+    return DATA_TYPE_FLOAT;
+}
 
 using Clock = std::chrono::steady_clock;
 using Ms = std::chrono::duration<double, std::milli>;
@@ -53,7 +68,7 @@ static void free_tensors(Tensors *t) {
     free(t);
 }
 
-static Tensors *make_yolo_input(int batch, int request_id) {
+static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dtype, int imgsz) {
     Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
     if (!ts) return nullptr;
     ts->id = request_id;
@@ -66,14 +81,14 @@ static Tensors *make_yolo_input(int batch, int request_id) {
 
     TensorDescriptor &td = ts->tensors[0];
     td.name = strdup("images");
-    td.data_type = DATA_TYPE_FLOAT;
+    td.data_type = dtype;
     td.rank = 4;
     td.shape = (int *)malloc(4 * sizeof(int));
     td.shape[0] = batch;
     td.shape[1] = YOLO_CHANNELS;
-    td.shape[2] = YOLO_HEIGHT;
-    td.shape[3] = YOLO_WIDTH;
-    size_t n_bytes = (size_t)batch * YOLO_CHANNELS * YOLO_HEIGHT * YOLO_WIDTH * sizeof(float);
+    td.shape[2] = imgsz;
+    td.shape[3] = imgsz;
+    size_t n_bytes = (size_t)batch * YOLO_CHANNELS * imgsz * imgsz * dtype_byte_size(dtype);
     td.data_size = n_bytes;
     td.data = calloc(1, n_bytes);
     if (!td.data) {
@@ -92,7 +107,7 @@ static bool validate_output(const Tensors *out, int batch) {
     if (td.rank != 3) return false;
     if (td.shape[0] != batch) return false;
     if (td.shape[1] != YOLO_OUT_CH) return false;
-    if (td.shape[2] != YOLO_ANCHORS) return false;
+    if (td.shape[2] <= 0) return false;  // anchors vary by input resolution
     if (td.data_type != DATA_TYPE_FLOAT) return false;
     return true;
 }
@@ -109,7 +124,7 @@ static double percentile(std::vector<double> v, double p) {
  * Returns per-request latencies (ms), or empty on failure.
  */
 static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send_times, bool validate_first, int batch,
-                                     int max_in_flight = 1) {
+                                     TensorElementType dtype, int imgsz, int max_in_flight = 1) {
     std::vector<double> latencies(n);
     std::atomic<bool> ok{true};
     std::atomic<int> in_flight{0};
@@ -120,7 +135,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
                 if (!ok) return;
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
-            Tensors *input = make_yolo_input(batch, i);
+            Tensors *input = make_yolo_input(batch, i, dtype, imgsz);
             if (!input) {
                 ok = false;
                 return;
@@ -181,10 +196,13 @@ int main(int argc, char **argv) {
     const char *model_path = argv[1];
     const char *device = "CPU";
     const char *perf_hint = "latency";
+    const char *input_dtype_str = "f32";
     int runs = 30;
     int warmup = 5;
     int batch = 1;
     int nireq = 0;  // 0 = use runtime default (optimal)
+    int in_flight = 5;
+    int imgsz = 640;
 
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc)
@@ -197,9 +215,16 @@ int main(int argc, char **argv) {
             perf_hint = argv[++i];
         else if (strcmp(argv[i], "--nireq") == 0 && i + 1 < argc)
             nireq = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--input-dtype") == 0 && i + 1 < argc)
+            input_dtype_str = argv[++i];
+        else if (strcmp(argv[i], "--in-flight") == 0 && i + 1 < argc)
+            in_flight = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--imgsz") == 0 && i + 1 < argc)
+            imgsz = atoi(argv[++i]);
         else
             device = argv[i];
     }
+    TensorElementType input_dtype = parse_input_dtype(input_dtype_str);
 
     std::cout << "=== OAAX YOLO Benchmark (v2) ===" << std::endl;
     std::cout << "Model     : " << model_path << std::endl;
@@ -207,6 +232,9 @@ int main(int argc, char **argv) {
     std::cout << "Perf hint : " << perf_hint << std::endl;
     std::cout << "Batch     : " << batch << std::endl;
     std::cout << "nireq     : " << (nireq > 0 ? std::to_string(nireq) : "auto") << std::endl;
+    std::cout << "Input dtype: " << input_dtype_str << std::endl;
+    std::cout << "In-flight  : " << in_flight << std::endl;
+    std::cout << "Image size : " << imgsz << "x" << imgsz << std::endl;
     std::cout << "Warmup    : " << warmup << " runs" << std::endl;
     std::cout << "Runs      : " << runs << std::endl << std::endl;
 
@@ -216,6 +244,8 @@ int main(int argc, char **argv) {
     const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests"};
     const char *init_vals[] = {device, perf_hint, "2", nireq_str.c_str()};
     Config init_cfg = {4, init_keys, init_vals};
+    const char *mc_keys[] = {"input_dtype"};
+    const char *mc_vals[] = {input_dtype_str};
     CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
     std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;
 
@@ -224,6 +254,7 @@ int main(int argc, char **argv) {
     auto tload = Clock::now();
     ModelConfig mc{};
     mc.file_path = model_path;
+    mc.config = {1, mc_keys, mc_vals};
     CHECK(runtime_load_models(1, &mc) == RUNTIME_STATUS_SUCCESS,
           std::string("runtime_load_models failed: ") + (runtime_get_error() ? runtime_get_error() : ""));
     double load_ms = Ms(Clock::now() - tload).count();
@@ -233,15 +264,16 @@ int main(int argc, char **argv) {
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false, batch, 5).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, batch, input_dtype, imgsz, in_flight).empty(), "warmup failed");
     }
     std::cout << "  Done" << std::endl;
 
     // ── 4. Benchmark ──────────────────────────────────────────────────────────
-    std::cout << "[4] Benchmarking (" << runs << " runs, batch=" << batch << ", in-flight=5)..." << std::endl;
+    std::cout << "[4] Benchmarking (" << runs << " runs, batch=" << batch << ", in-flight=" << in_flight << ")..."
+              << std::endl;
     std::vector<Clock::time_point> send_times(runs);
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true, batch, 5);
+    auto latencies = run_batch(runs, send_times, true, batch, input_dtype, imgsz, in_flight);
     double bench_ms = Ms(Clock::now() - bench_start).count();
     CHECK(!latencies.empty(), "benchmark failed");
 

@@ -20,6 +20,8 @@ COMPILED_DIR = Path(__file__).parent / "compiled_models"
 DOCKER_IMAGE = "oaax-intel-toolchain:latest"
 YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
 YOLO_MODELS_B4 = ["yolo11n_b4", "yolo11s_b4"]
+YOLO_MODELS_320 = ["yolo11n_320", "yolo11s_320"]
+YOLO_MODELS_320_B4 = ["yolo11n_320_b4", "yolo11s_320_b4"]
 
 _CONFIGS = {
     "FP32": {"optimization": {"fp16_compression": False}},
@@ -159,6 +161,92 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
             xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
             if xml.exists():
                 # Ensure a zip exists alongside the extracted IR for the C++ runtime.
+                zip_path = xml.with_suffix(".zip")
+                if not zip_path.exists() and xml.with_suffix(".bin").exists():
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        zf.write(xml, arcname=xml.name)
+                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
+                result[(model_name, variant)] = xml
+                continue
+            _convert_with_docker(
+                model_name,
+                variant,
+                onnx,
+                COMPILED_DIR / model_name / variant,
+                config,
+                calibration_dir if variant == "INT8" else None,
+            )
+            result[(model_name, variant)] = xml
+
+    return result
+
+
+@pytest.fixture(scope="session")
+def compiled_yolo_models_320(calibration_dir: Path) -> dict:
+    """
+    Convert yolo11n/yolo11s at 320x320 (FP32/FP16/INT8) via Docker toolchain.
+    Returns {(model_name, variant): Path-to-xml}.
+    """
+    if not _docker_image_available():
+        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
+
+    try:
+        import ultralytics  # noqa: F401
+    except ImportError:
+        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
+
+    onnx_dir = COMPILED_DIR / "onnx"
+    onnx_dir.mkdir(parents=True, exist_ok=True)
+
+    result = {}
+    for model_name in YOLO_MODELS_320:
+        onnx = Path(download_model(model_name, str(onnx_dir)))
+        for variant, config in _CONFIGS.items():
+            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
+            if xml.exists():
+                zip_path = xml.with_suffix(".zip")
+                if not zip_path.exists() and xml.with_suffix(".bin").exists():
+                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                        zf.write(xml, arcname=xml.name)
+                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
+                result[(model_name, variant)] = xml
+                continue
+            _convert_with_docker(
+                model_name,
+                variant,
+                onnx,
+                COMPILED_DIR / model_name / variant,
+                config,
+                calibration_dir if variant == "INT8" else None,
+            )
+            result[(model_name, variant)] = xml
+
+    return result
+
+
+@pytest.fixture(scope="session")
+def compiled_yolo_models_320_batch4(calibration_dir: Path) -> dict:
+    """
+    Convert yolo11n/yolo11s at 320x320 with batch=4 (FP32/FP16/INT8) via Docker toolchain.
+    Returns {(model_name, variant): Path-to-xml}.
+    """
+    if not _docker_image_available():
+        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
+
+    try:
+        import ultralytics  # noqa: F401
+    except ImportError:
+        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
+
+    onnx_dir = COMPILED_DIR / "onnx"
+    onnx_dir.mkdir(parents=True, exist_ok=True)
+
+    result = {}
+    for model_name in YOLO_MODELS_320_B4:
+        onnx = Path(download_model(model_name, str(onnx_dir)))
+        for variant, config in _CONFIGS_B4.items():
+            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
+            if xml.exists():
                 zip_path = xml.with_suffix(".zip")
                 if not zip_path.exists() and xml.with_suffix(".bin").exists():
                     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:

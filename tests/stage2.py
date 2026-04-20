@@ -29,7 +29,17 @@ TEST_BUILD_DIR = ROOT / "tests" / "runtime" / "build"
 IS_WINDOWS = platform.system() == "Windows"
 
 # Match the models compiled by stage1 / test_yolo_integration.py.
-YOLO_MODELS = {"yolov8n", "yolo11n", "yolo11s", "yolo11n_b4", "yolo11s_b4"}
+YOLO_MODELS = {
+    "yolov8n",
+    "yolo11n",
+    "yolo11s",
+    "yolo11n_b4",
+    "yolo11s_b4",
+    "yolo11n_320",
+    "yolo11s_320",
+    "yolo11n_320_b4",
+    "yolo11s_320_b4",
+}
 
 
 def header(title: str) -> None:
@@ -186,7 +196,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int, perf_hint: str = "t
 
 
 def run_yolo_test(
-    zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1, perf_hint: str = "throughput"
+    zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1, perf_hint: str = "throughput", imgsz: int = 640
 ) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
@@ -208,6 +218,8 @@ def run_yolo_test(
     ]
     if batch > 1:
         cmd += ["--batch", str(batch)]
+    if imgsz != 640:
+        cmd += ["--imgsz", str(imgsz)]
     text = run_process(
         cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
@@ -330,8 +342,11 @@ def main() -> None:
             print_table_header()
             for zip_path, model, variant in models:
                 batch = 4 if model.endswith("_b4") else 1
+                imgsz = 320 if "_320" in model else 640
                 for device in devices:
-                    r = run_yolo_test(zip_path, device, args.warmup, args.runs, batch=batch, perf_hint=hint)
+                    r = run_yolo_test(
+                        zip_path, device, args.warmup, args.runs, batch=batch, perf_hint=hint, imgsz=imgsz
+                    )
                     if r:
                         print(_ROW.format(model, variant, device, *r))
                         write_csv_row(csv_writer, "yolo_test", model, variant, device, hint, r)
