@@ -93,10 +93,9 @@ static void deep_free_tensors(Tensors *t) {
 struct SlotState {
   Tensors *input{nullptr};
 #ifdef OAAX_PROFILE
-  ProfNs t_enqueue_ns{0};  // when caller called runtime_enqueue_input
-  ProfNs t_dequeue_ns{0};  // when manager dequeued from input_queue
-  ProfNs t_slot_ns{0};     // when slot was acquired
-  ProfNs t_async_ns{0};    // just before start_async()
+  ProfNs t_enqueue_ns{0};   // when caller called runtime_enqueue_input
+  ProfNs t_dispatch_ns{0};  // when dispatch_to_slot() was entered
+  ProfNs t_async_ns{0};     // just before start_async()
 #endif
 };
 
@@ -112,7 +111,6 @@ struct ModelState {
   // (FIFO).
   moodycamel::ConcurrentQueue<ProfNs> enqueue_times;
 #endif
-  sem_t slot_sem;
   sem_t input_sem;
   std::thread manager_thread;
   std::atomic<bool> stop{false};
@@ -216,6 +214,48 @@ static Tensors *build_output(int model_id, int slot_idx, int request_id) {
   return out;
 }
 
+// ─── Slot dispatcher ─────────────────────────────────────────────────────────
+// Called from any thread (OV callback, manager, or enqueue caller).
+// Takes ownership of `input`; on tensor-setup failure frees it and returns the
+// slot to free_slots so the pipeline stays live.
+
+static void dispatch_to_slot(int model_id, int slot_idx, Tensors *input) {
+  ModelState &m = *g_models[model_id];
+  SlotState &s = m.slot_states[slot_idx];
+  s.input = input;
+
+#ifdef OAAX_PROFILE
+  ProfNs t_enqueue = 0;
+  m.enqueue_times.try_dequeue(t_enqueue);
+  s.t_enqueue_ns = t_enqueue;
+  s.t_dispatch_ns = PROF_NOW();
+#endif
+
+  ov::InferRequest &req = m.infer_requests[slot_idx];
+  try {
+    for (int i = 0; i < input->num_tensors; ++i) {
+      TensorDescriptor &td = input->tensors[i];
+      ov::Shape shape;
+      for (int j = 0; j < td.rank; ++j) shape.push_back((size_t)td.shape[j]);
+      req.set_tensor(td.name,
+                     ov::Tensor(map_to_ov_type(td.data_type), shape, td.data));
+    }
+  } catch (const std::exception &e) {
+    g_logger->error("[model {} slot {}] Tensor setup failed: {}", model_id,
+                    slot_idx, e.what());
+    deep_free_tensors(input);
+    s.input = nullptr;
+    m.free_slots.enqueue(slot_idx);
+    return;
+  }
+
+#ifdef OAAX_PROFILE
+  s.t_async_ns = PROF_NOW();
+#endif
+  g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
+  req.start_async();
+}
+
 // ─── Inference completion callback ───────────────────────────────────────────
 
 static void on_inference_complete(int model_id, int slot_idx,
@@ -237,7 +277,6 @@ static void on_inference_complete(int model_id, int slot_idx,
     deep_free_tensors(s.input);
     s.input = nullptr;
     m.free_slots.enqueue(slot_idx);
-    sem_post(&m.slot_sem);
     return;
   }
 
@@ -247,18 +286,23 @@ static void on_inference_complete(int model_id, int slot_idx,
   auto ns2ms = [](ProfNs a, ProfNs b) { return (b - a) / 1e6; };
   g_logger->info(
       "[prof model={} slot={} req={}] "
-      "queue={:.3f}ms slot={:.3f}ms setup={:.3f}ms "
-      "infer={:.3f}ms build={:.3f}ms total={:.3f}ms",
-      model_id, slot_idx, request_id, ns2ms(s.t_enqueue_ns, s.t_dequeue_ns),
-      ns2ms(s.t_dequeue_ns, s.t_slot_ns), ns2ms(s.t_slot_ns, s.t_async_ns),
-      ns2ms(s.t_async_ns, t_callback), ns2ms(t_callback, t_output_built),
-      ns2ms(s.t_enqueue_ns, t_output_built));
+      "dispatch={:.3f}ms setup={:.3f}ms infer={:.3f}ms "
+      "build={:.3f}ms total={:.3f}ms",
+      model_id, slot_idx, request_id, ns2ms(s.t_enqueue_ns, s.t_dispatch_ns),
+      ns2ms(s.t_dispatch_ns, s.t_async_ns), ns2ms(s.t_async_ns, t_callback),
+      ns2ms(t_callback, t_output_built), ns2ms(s.t_enqueue_ns, t_output_built));
 #endif
   deep_free_tensors(s.input);
   s.input = nullptr;
 
-  m.free_slots.enqueue(slot_idx);
-  sem_post(&m.slot_sem);
+  // Hot path: immediately reload this slot if input is waiting — zero GPU idle.
+  // Cold path: slot goes idle; manager will pair it with the next enqueue call.
+  Tensors *next = nullptr;
+  if (!m.stop && m.input_queue.try_dequeue(next)) {
+    dispatch_to_slot(model_id, slot_idx, next);
+  } else {
+    m.free_slots.enqueue(slot_idx);
+  }
 
   if (output && g_output_queue.try_enqueue({model_id, output})) {
     sem_post(&g_output_sem);
@@ -270,8 +314,10 @@ static void on_inference_complete(int model_id, int slot_idx,
   }
 }
 
-// ─── Per-model manager thread
-// ─────────────────────────────────────────────────
+// ─── Per-model manager thread (cold-start handler)
+// ────────────────────────────────────────────────
+// Hot path: on_inference_complete() reloads slots directly — no thread hop.
+// This thread only runs when all slots went idle and new input arrives later.
 
 static void manager_loop(int model_id) {
   ModelState &m = *g_models[model_id];
@@ -284,60 +330,20 @@ static void manager_loop(int model_id) {
 #endif
     if (m.stop) return;
 
-    Tensors *input = nullptr;
-    m.input_queue.try_dequeue(input);
-    if (!input) continue;
-
-#ifdef OAAX_PROFILE
-    ProfNs t_dequeue = PROF_NOW();
-    ProfNs t_enqueue = 0;
-    m.enqueue_times.try_dequeue(t_enqueue);
-#endif
-
-#ifndef _WIN32
-    while (sem_wait(&m.slot_sem) == -1 && errno == EINTR) continue;
-#else
-    sem_wait(&m.slot_sem);
-#endif
-    if (m.stop) {
-      deep_free_tensors(input);
-      return;
-    }
-
+    // Try to pair an idle slot with a queued input.
+    // If no idle slot: all slots are busy — the next callback will drain the
+    // queue. If no input: spurious wakeup (callback or fast-path already took
+    // it). Either way, just loop back.
     int slot_idx = -1;
-    m.free_slots.try_dequeue(slot_idx);
-    m.slot_states[slot_idx].input = input;
-#ifdef OAAX_PROFILE
-    m.slot_states[slot_idx].t_enqueue_ns = t_enqueue;
-    m.slot_states[slot_idx].t_dequeue_ns = t_dequeue;
-    m.slot_states[slot_idx].t_slot_ns = PROF_NOW();
-#endif
+    if (!m.free_slots.try_dequeue(slot_idx)) continue;
 
-    ov::InferRequest &req = m.infer_requests[slot_idx];
-
-    try {
-      for (int i = 0; i < input->num_tensors; ++i) {
-        TensorDescriptor &td = input->tensors[i];
-        ov::Shape shape;
-        for (int j = 0; j < td.rank; ++j) shape.push_back((size_t)td.shape[j]);
-        req.set_tensor(
-            td.name, ov::Tensor(map_to_ov_type(td.data_type), shape, td.data));
-      }
-    } catch (const std::exception &e) {
-      g_logger->error("[model {} slot {}] Tensor setup failed: {}", model_id,
-                      slot_idx, e.what());
-      deep_free_tensors(input);
-      m.slot_states[slot_idx].input = nullptr;
-      m.free_slots.enqueue(slot_idx);
-      sem_post(&m.slot_sem);
+    Tensors *input = nullptr;
+    if (!m.input_queue.try_dequeue(input)) {
+      m.free_slots.enqueue(slot_idx);  // put slot back
       continue;
     }
 
-#ifdef OAAX_PROFILE
-    m.slot_states[slot_idx].t_async_ns = PROF_NOW();
-#endif
-    g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
-    req.start_async();
+    dispatch_to_slot(model_id, slot_idx, input);
   }
 }
 
@@ -561,7 +567,6 @@ RuntimeStatus runtime_load_models(int num_models,
             ms->compiled_model.create_infer_request());
 
       ms->slot_states.resize(n_req);
-      sem_init(&ms->slot_sem, 0, (unsigned)n_req);
       sem_init(&ms->input_sem, 0, 0);
 
       for (int i = 0; i < n_req; ++i) ms->free_slots.enqueue(i);
@@ -593,13 +598,11 @@ fail:
   // Stop and clean up all models created so far
   for (auto *ms : g_models) {
     ms->stop = true;
-    sem_post(&ms->slot_sem);
     sem_post(&ms->input_sem);
     if (ms->manager_thread.joinable()) ms->manager_thread.join();
     for (auto &req : ms->infer_requests) req.wait();
     Tensors *t;
     while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
-    sem_destroy(&ms->slot_sem);
     sem_destroy(&ms->input_sem);
     cleanup_temp_dir(ms->temp_dir);
     delete ms;
@@ -623,10 +626,21 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
   }
 
   ModelState &m = *g_models[model_id];
+
 #ifdef OAAX_PROFILE
-  ProfNs t_enq = PROF_NOW();
-  m.enqueue_times.try_enqueue(t_enq);
+  m.enqueue_times.try_enqueue(PROF_NOW());
 #endif
+
+  // Fast path: an idle slot is available — dispatch directly, no thread hop.
+  int idle_slot = -1;
+  if (m.free_slots.try_dequeue(idle_slot)) {
+    dispatch_to_slot(model_id, idle_slot, input_tensors);
+    return RUNTIME_STATUS_SUCCESS;
+  }
+
+  // Slow path: all slots busy — queue for the next callback to pick up.
+  // Also post input_sem as a safety net for the race where a callback goes idle
+  // between our free_slots check and the input_queue.enqueue below.
   if (!m.input_queue.try_enqueue(input_tensors)) {
 #ifdef OAAX_PROFILE
     ProfNs dummy;
@@ -636,7 +650,8 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors *input_tensors) {
     return RUNTIME_STATUS_ERROR;
   }
   sem_post(&m.input_sem);
-  g_logger->trace("[model {}] Input enqueued (id={})", model_id,
+
+  g_logger->trace("[model {}] Input queued (id={})", model_id,
                   input_tensors->id);
   return RUNTIME_STATUS_SUCCESS;
 }
@@ -672,7 +687,6 @@ RuntimeStatus runtime_cleanup(void) {
   // Stop all manager threads and wait for in-flight requests
   for (auto *ms : g_models) {
     ms->stop = true;
-    sem_post(&ms->slot_sem);
     sem_post(&ms->input_sem);
     if (ms->manager_thread.joinable()) ms->manager_thread.join();
     for (auto &req : ms->infer_requests) req.wait();
@@ -682,7 +696,6 @@ RuntimeStatus runtime_cleanup(void) {
   for (auto *ms : g_models) {
     Tensors *t;
     while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
-    sem_destroy(&ms->slot_sem);
     sem_destroy(&ms->input_sem);
     ms->infer_requests.clear();
     cleanup_temp_dir(ms->temp_dir);
