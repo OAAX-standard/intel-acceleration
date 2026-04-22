@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Runtime:** Model loading no longer crashes on VMs (e.g. QEMU) that do not expose the `pclmulqdq`
+  CPU instruction. OpenVINO requires this instruction for CRC hashing when the compiled-model cache
+  is active. The runtime now catches the exception, disables caching globally for the session, and
+  retries compilation on the same device — transparent to the caller and requiring no config change.
+
+---
+
 ## [2.0.0] - 2026-04-19
 
 ### Runtime Library — OAAX v2 Interface
