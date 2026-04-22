@@ -565,7 +565,17 @@ RuntimeStatus runtime_load_models(int num_models,
       try {
         compiled = g_core->compile_model(model, eff_device, perf_cfg);
       } catch (const std::exception& e) {
-        if (device != "CPU") {
+        std::string err_msg = e.what();
+        bool no_pclmulqdq = err_msg.find("pclmulqdq") != std::string::npos ||
+                            err_msg.find("CRC algorithm") != std::string::npos;
+        if (no_pclmulqdq) {
+          // CPU lacks pclmulqdq (common in VMs); disable cache globally and
+          // retry
+          g_logger->warn(
+              "[model {}] CPU lacks pclmulqdq — model cache disabled", m_idx);
+          g_core->set_property(ov::cache_dir(""));
+          compiled = g_core->compile_model(model, eff_device, perf_cfg);
+        } else if (device != "CPU") {
           g_logger->warn(
               "[model {}] Compile on {} failed ({}), falling back to CPU",
               m_idx, eff_device, e.what());
