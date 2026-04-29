@@ -148,7 +148,7 @@ static std::string g_device_type = "CPU";
 static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
 static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
-static int g_max_queue_size = 0;  // 0 = unlimited
+static int g_max_queue_size = 100;
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -440,10 +440,10 @@ RuntimeStatus runtime_init(Config config) {
     g_num_requests = 0;
   }
   try {
-    g_max_queue_size = std::stoi(config_get(config, "max_queue_size", "0"));
-    if (g_max_queue_size < 0) g_max_queue_size = 0;
+    g_max_queue_size = std::stoi(config_get(config, "max_queue_size", "100"));
+    if (g_max_queue_size < 0) g_max_queue_size = 100;
   } catch (...) {
-    g_max_queue_size = 0;
+    g_max_queue_size = 100;
   }
   std::string hint = config_get(config, "perf_hint", "latency");
   if (hint == "latency" || hint == "throughput" ||
@@ -470,7 +470,7 @@ RuntimeStatus runtime_init(Config config) {
     g_logger->info("  log_stdout:     {}", g_log_stdout ? "true" : "false");
     g_logger->info(
         "  max_queue_size: {}",
-        g_max_queue_size > 0 ? std::to_string(g_max_queue_size) : "unlimited");
+        g_max_queue_size > 0 ? std::to_string(g_max_queue_size) : "disabled");
 
     g_core = std::make_shared<ov::Core>();
 
