@@ -148,6 +148,7 @@ static std::string g_device_type = "CPU";
 static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
 static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
+static int g_max_queue_size = 0;  // 0 = unlimited
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -438,6 +439,12 @@ RuntimeStatus runtime_init(Config config) {
   } catch (...) {
     g_num_requests = 0;
   }
+  try {
+    g_max_queue_size = std::stoi(config_get(config, "max_queue_size", "0"));
+    if (g_max_queue_size < 0) g_max_queue_size = 0;
+  } catch (...) {
+    g_max_queue_size = 0;
+  }
   std::string hint = config_get(config, "perf_hint", "latency");
   if (hint == "latency" || hint == "throughput" ||
       hint == "cumulative_throughput")
@@ -460,7 +467,10 @@ RuntimeStatus runtime_init(Config config) {
     g_logger->info("  perf_hint:   {}", g_perf_hint);
     g_logger->info("  log_level:   {}", g_log_level);
     g_logger->info("  log_file:    {}", g_log_file);
-    g_logger->info("  log_stdout:  {}", g_log_stdout ? "true" : "false");
+    g_logger->info("  log_stdout:     {}", g_log_stdout ? "true" : "false");
+    g_logger->info(
+        "  max_queue_size: {}",
+        g_max_queue_size > 0 ? std::to_string(g_max_queue_size) : "unlimited");
 
     g_core = std::make_shared<ov::Core>();
 
@@ -679,6 +689,25 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   }
 
   ModelState& m = *g_models[model_id];
+
+  if (g_max_queue_size > 0) {
+    size_t in_pending = m.input_queue.size_approx();
+    if ((int)in_pending >= g_max_queue_size) {
+      g_logger->warn(
+          "[model {}] Input queue at capacity ({}/{}), rejecting input id={}",
+          model_id, in_pending, g_max_queue_size, input_tensors->id);
+      set_error("runtime_enqueue_input: input queue at capacity");
+      return RUNTIME_STATUS_ERROR;
+    }
+    size_t out_pending = g_output_queue.size_approx();
+    if ((int)out_pending >= g_max_queue_size) {
+      g_logger->warn(
+          "[model {}] Output queue at capacity ({}/{}), rejecting input id={}",
+          model_id, out_pending, g_max_queue_size, input_tensors->id);
+      set_error("runtime_enqueue_input: output queue at capacity");
+      return RUNTIME_STATUS_ERROR;
+    }
+  }
 
 #ifdef OAAX_PROFILE
   m.enqueue_times.try_enqueue(PROF_NOW());

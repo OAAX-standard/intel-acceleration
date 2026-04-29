@@ -109,6 +109,7 @@ When `device_type="GPU"` and multiple GPU devices are present, the runtime autom
 | `log_file` | `"runtime.log"` | Log file path |
 | `cache_dir` | `"."` (CWD) | OpenVINO compiled-model cache. Set to `""` to disable. |
 | `log_stdout` | `"0"` | Set to `"1"` to also print logs to stdout (default: file only). |
+| `max_queue_size` | `"0"` (unlimited) | Max pending items in the input and output queues. New inputs are rejected with a warning when either queue reaches this limit. |
 
 **Output ownership:** caller owns `Tensors*` returned by `runtime_retrieve_output` and must free
 `tensors[i].name`, `tensors[i].shape`, `tensors[i].data`, `tensors`, and the `Tensors` struct itself.
