@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -174,6 +175,12 @@ static void config_warn_unknown(const Config& cfg,
     if (!found)
       g_logger->warn("Unknown config key '{}' — ignored", cfg.keys[i]);
   }
+}
+
+static inline long long elapsed_us(std::chrono::steady_clock::time_point t0) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - t0)
+      .count();
 }
 
 static void set_error(const std::string& msg) {
@@ -709,6 +716,7 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   }
 
   ModelState& m = *g_models[model_id];
+  auto t0 = std::chrono::steady_clock::now();
 
   if (g_max_queue_size > 0) {
     size_t in_pending = m.input_queue.size_approx();
@@ -717,6 +725,9 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
           "[model {}] Input queue at capacity ({}/{}), rejecting input id={}",
           model_id, in_pending, g_max_queue_size, input_tensors->id);
       set_error("runtime_enqueue_input: input queue at capacity");
+      g_logger->trace(
+          "[enqueue model={} id={}] rejected (input queue full) {}µs", model_id,
+          input_tensors->id, elapsed_us(t0));
       return RUNTIME_STATUS_ERROR;
     }
     size_t out_pending = g_output_queue.size_approx();
@@ -725,6 +736,9 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
           "[model {}] Output queue at capacity ({}/{}), rejecting input id={}",
           model_id, out_pending, g_max_queue_size, input_tensors->id);
       set_error("runtime_enqueue_input: output queue at capacity");
+      g_logger->trace(
+          "[enqueue model={} id={}] rejected (output queue full) {}µs",
+          model_id, input_tensors->id, elapsed_us(t0));
       return RUNTIME_STATUS_ERROR;
     }
   }
@@ -737,6 +751,8 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   int idle_slot = -1;
   if (m.free_slots.try_dequeue(idle_slot)) {
     dispatch_to_slot(model_id, idle_slot, input_tensors);
+    g_logger->trace("[enqueue model={} id={}] fast path {}µs", model_id,
+                    input_tensors->id, elapsed_us(t0));
     return RUNTIME_STATUS_SUCCESS;
   }
 
@@ -749,12 +765,14 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
     m.enqueue_times.try_dequeue(dummy);  // rollback timestamp
 #endif
     set_error("runtime_enqueue_input: input queue full");
+    g_logger->trace("[enqueue model={} id={}] rejected (enqueue failed) {}µs",
+                    model_id, input_tensors->id, elapsed_us(t0));
     return RUNTIME_STATUS_ERROR;
   }
   sem_post(&m.input_sem);
 
-  g_logger->trace("[model {}] Input queued (id={})", model_id,
-                  input_tensors->id);
+  g_logger->trace("[enqueue model={} id={}] slow path {}µs", model_id,
+                  input_tensors->id, elapsed_us(t0));
   return RUNTIME_STATUS_SUCCESS;
 }
 
@@ -766,11 +784,18 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
     return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
 
-  if (!wait_for_output(timeout_ms)) return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
+  auto t0 = std::chrono::steady_clock::now();
+
+  if (!wait_for_output(timeout_ms)) {
+    g_logger->trace("[retrieve] no output (timeout={}ms) {}µs", timeout_ms,
+                    elapsed_us(t0));
+    return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
+  }
 
   OutputItem item;
   if (!g_output_queue.try_dequeue(item)) {
     // Semaphore signalled but queue empty — shouldn't happen, but handle it.
+    g_logger->trace("[retrieve] dequeue miss {}µs", elapsed_us(t0));
     return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
   }
 
@@ -778,6 +803,8 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
   *output_tensors = item.tensors;
   g_logger->debug("[model {}] Output retrieved (id={})", item.model_id,
                   item.tensors->id);
+  g_logger->trace("[retrieve model={} id={}] {}µs", item.model_id,
+                  item.tensors->id, elapsed_us(t0));
   return RUNTIME_STATUS_SUCCESS;
 }
 
