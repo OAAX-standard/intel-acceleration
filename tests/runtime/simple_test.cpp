@@ -122,6 +122,28 @@ int main(int argc, char **argv) {
     ASSERT(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "second cleanup failed");
     PASS("cleanup OK (idempotent)");
 
+    // ── 8. log_stdout=1 accepted ──────────────────────────────────────────────
+    std::cout << "\n[8] runtime_init() with log_stdout=1" << std::endl;
+    {
+        const char *k[] = {"log_level", "log_stdout"};
+        const char *v[] = {"2", "1"};
+        Config c = {2, k, v};
+        ASSERT(runtime_init(c) == RUNTIME_STATUS_SUCCESS, "init with log_stdout=1 failed");
+        ASSERT(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "cleanup after log_stdout=1 failed");
+    }
+    PASS("log_stdout=1 accepted");
+
+    // ── 9. max_queue_size=0 (disabled) accepted ───────────────────────────────
+    std::cout << "\n[9] runtime_init() with max_queue_size=0" << std::endl;
+    {
+        const char *k[] = {"log_level", "max_queue_size"};
+        const char *v[] = {"2", "0"};
+        Config c = {2, k, v};
+        ASSERT(runtime_init(c) == RUNTIME_STATUS_SUCCESS, "init with max_queue_size=0 failed");
+        ASSERT(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "cleanup after max_queue_size=0 failed");
+    }
+    PASS("max_queue_size=0 (disabled) accepted");
+
     std::cout << "\n=== All tests passed ===" << std::endl;
     return 0;
 }

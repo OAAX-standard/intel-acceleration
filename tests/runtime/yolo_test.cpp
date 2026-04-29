@@ -6,7 +6,7 @@
  * Usage:
  *   ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
  *               [--perf-hint latency|throughput] [--input-dtype f32|u8|f16]
- *               [--in-flight N] [--imgsz N]
+ *               [--in-flight N] [--imgsz N] [--queue-limit-test]
  * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=5, imgsz=640
  */
 
@@ -203,6 +203,7 @@ int main(int argc, char **argv) {
     int nireq = 0;  // 0 = use runtime default (optimal)
     int in_flight = 5;
     int imgsz = 640;
+    bool test_queue_limit = false;
 
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc)
@@ -221,6 +222,8 @@ int main(int argc, char **argv) {
             in_flight = atoi(argv[++i]);
         else if (strcmp(argv[i], "--imgsz") == 0 && i + 1 < argc)
             imgsz = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--queue-limit-test") == 0)
+            test_queue_limit = true;
         else
             device = argv[i];
     }
@@ -295,6 +298,51 @@ int main(int argc, char **argv) {
     std::cout << "\n[5] Cleaning up..." << std::endl;
     CHECK(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "runtime_cleanup failed");
     std::cout << "  Done" << std::endl;
+
+    // ── 6. Queue limit test (optional) ────────────────────────────────────────
+    // Verifies that max_queue_size rejects inputs when queues are at capacity.
+    // Uses 1 infer slot and a limit of 3: after 4 accepted enqueues (1 in-slot +
+    // 3 in input_queue) every further enqueue must be rejected.
+    if (test_queue_limit) {
+        std::cout << "\n[6] Queue limit test (max_queue_size=3, num_requests=1)..." << std::endl;
+
+        const int QUEUE_LIMIT = 3;
+        const int FLOOD = 20;
+        std::string ql_str = std::to_string(QUEUE_LIMIT);
+        const char *ql_keys[] = {"device_type", "log_level", "num_requests", "max_queue_size"};
+        const char *ql_vals[] = {device, "2", "1", ql_str.c_str()};
+        Config ql_cfg = {4, ql_keys, ql_vals};
+        CHECK(runtime_init(ql_cfg) == RUNTIME_STATUS_SUCCESS, "queue-limit re-init failed");
+
+        ModelConfig ql_mc{};
+        ql_mc.file_path = model_path;
+        const char *ql_mc_keys[] = {"input_dtype"};
+        const char *ql_mc_vals[] = {input_dtype_str};
+        ql_mc.config = {1, ql_mc_keys, ql_mc_vals};
+        CHECK(runtime_load_models(1, &ql_mc) == RUNTIME_STATUS_SUCCESS, "queue-limit model load failed");
+
+        int rejected = 0;
+        for (int i = 0; i < FLOOD; ++i) {
+            Tensors *inp = make_yolo_input(1, i, input_dtype, imgsz);
+            CHECK(inp != nullptr, "make_yolo_input returned null");
+            RuntimeStatus st = runtime_enqueue_input(0, inp);
+            if (st != RUNTIME_STATUS_SUCCESS) {
+                rejected++;
+                free_tensors(inp);  // runtime didn't take ownership on failure
+            }
+        }
+
+        CHECK(rejected > 0, "expected at least one rejection with max_queue_size=3, got none");
+        std::cout << "  Rejected " << rejected << "/" << FLOOD << " inputs as expected" << std::endl;
+
+        // Drain remaining in-flight outputs
+        int mid = -1;
+        Tensors *out = nullptr;
+        while (runtime_retrieve_output(&mid, &out, 100) == RUNTIME_STATUS_SUCCESS) free_tensors(out);
+
+        CHECK(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "queue-limit cleanup failed");
+        std::cout << "  PASS: max_queue_size enforced correctly" << std::endl;
+    }
 
     return 0;
 }
