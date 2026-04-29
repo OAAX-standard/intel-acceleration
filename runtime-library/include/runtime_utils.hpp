@@ -13,7 +13,8 @@ TensorElementType map_from_ov_type(ov::element::Type type);
 
 std::shared_ptr<spdlog::logger> initialize_logger(
     const std::string &log_file, int file_level = spdlog::level::info,
-    int console_level = spdlog::level::info, const std::string prefix = "OAAX");
+    bool log_to_stdout = false, int console_level = spdlog::level::info,
+    const std::string prefix = "OAAX");
 
 void destroy_logger(std::shared_ptr<spdlog::logger> logger);
 

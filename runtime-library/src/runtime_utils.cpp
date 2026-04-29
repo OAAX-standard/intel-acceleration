@@ -71,27 +71,38 @@ TensorElementType map_from_ov_type(ov::element::Type type) {
 
 std::shared_ptr<spdlog::logger> initialize_logger(const std::string &log_file,
                                                   int file_level,
+                                                  bool log_to_stdout,
                                                   int console_level,
                                                   const std::string prefix) {
   try {
-    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    console_sink->set_level(
-        static_cast<spdlog::level::level_enum>(console_level));
-
     auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
         log_file, 1024 * 1024 * 5, 3);
     file_sink->set_level(static_cast<spdlog::level::level_enum>(file_level));
 
+    spdlog::sinks_init_list sinks;
+    int effective_level = file_level;
+
+    std::shared_ptr<spdlog::async_logger> logger;
     static auto thread_pool =
         std::make_shared<spdlog::details::thread_pool>(8192, 1);
 
-    auto logger = std::make_shared<spdlog::async_logger>(
-        prefix, spdlog::sinks_init_list{console_sink, file_sink}, thread_pool,
-        spdlog::async_overflow_policy::overrun_oldest);
+    if (log_to_stdout) {
+      auto console_sink =
+          std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+      console_sink->set_level(
+          static_cast<spdlog::level::level_enum>(console_level));
+      effective_level = std::min(file_level, console_level);
+      logger = std::make_shared<spdlog::async_logger>(
+          prefix, spdlog::sinks_init_list{console_sink, file_sink}, thread_pool,
+          spdlog::async_overflow_policy::overrun_oldest);
+    } else {
+      logger = std::make_shared<spdlog::async_logger>(
+          prefix, spdlog::sinks_init_list{file_sink}, thread_pool,
+          spdlog::async_overflow_policy::overrun_oldest);
+    }
 
     spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [" + prefix + "] [%^%l%$] %v");
-    logger->set_level(static_cast<spdlog::level::level_enum>(
-        std::min(file_level, console_level)));
+    logger->set_level(static_cast<spdlog::level::level_enum>(effective_level));
     logger->flush_on(spdlog::level::trace);
 
     return logger;

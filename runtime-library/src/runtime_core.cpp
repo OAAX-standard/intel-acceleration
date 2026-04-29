@@ -143,6 +143,7 @@ static std::string g_info_json;
 // Global config defaults (can be overridden per-model)
 static int g_log_level = spdlog::level::info;
 static std::string g_log_file = "runtime.log";
+static bool g_log_stdout = false;
 static std::string g_device_type = "CPU";
 static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
@@ -428,6 +429,7 @@ RuntimeStatus runtime_init(Config config) {
   // Parse global config
   std::string log_level_str = config_get(config, "log_level", "2");
   g_log_file = config_get(config, "log_file", "runtime.log");
+  g_log_stdout = config_get(config, "log_stdout", "0") == "1";
   g_device_type = config_get(config, "device_type", "CPU");
   g_cache_dir = config_get(config, "cache_dir", ".");
   try {
@@ -451,13 +453,14 @@ RuntimeStatus runtime_init(Config config) {
   if (g_log_level < 0 || g_log_level > 6) g_log_level = spdlog::level::info;
 
   try {
-    g_logger = initialize_logger(g_log_file, g_log_level, g_log_level,
-                                 runtime_get_name());
+    g_logger = initialize_logger(g_log_file, g_log_level, g_log_stdout,
+                                 g_log_level, runtime_get_name());
     g_logger->info("Initializing runtime");
     g_logger->info("  device_type: {}", g_device_type);
     g_logger->info("  perf_hint:   {}", g_perf_hint);
     g_logger->info("  log_level:   {}", g_log_level);
     g_logger->info("  log_file:    {}", g_log_file);
+    g_logger->info("  log_stdout:  {}", g_log_stdout ? "true" : "false");
 
     g_core = std::make_shared<ov::Core>();
 
