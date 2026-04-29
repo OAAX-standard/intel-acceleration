@@ -161,6 +161,21 @@ static std::string config_get(const Config& cfg, const char* key,
   return fallback;
 }
 
+static void config_warn_unknown(const Config& cfg,
+                                std::initializer_list<const char*> known) {
+  for (int i = 0; i < cfg.length; ++i) {
+    if (!cfg.keys[i]) continue;
+    bool found = false;
+    for (const char* k : known)
+      if (strcmp(cfg.keys[i], k) == 0) {
+        found = true;
+        break;
+      }
+    if (!found)
+      g_logger->warn("Unknown config key '{}' — ignored", cfg.keys[i]);
+  }
+}
+
 static void set_error(const std::string& msg) {
   g_last_error = msg;
   if (g_logger) g_logger->error("{}", msg);
@@ -490,6 +505,9 @@ RuntimeStatus runtime_init(Config config) {
       g_logger->info("  cache_dir: (disabled)");
     }
 
+    config_warn_unknown(
+        config, {"log_level", "log_file", "log_stdout", "device_type",
+                 "perf_hint", "cache_dir", "num_requests", "max_queue_size"});
     log_available_devices();
     g_initialized = true;
     return RUNTIME_STATUS_SUCCESS;
@@ -532,6 +550,8 @@ RuntimeStatus runtime_load_models(int num_models,
       std::string device = config_get(mc.config, "device_type", g_device_type);
       std::string hint = config_get(mc.config, "perf_hint", g_perf_hint);
       std::string cdir = config_get(mc.config, "cache_dir", g_cache_dir);
+      config_warn_unknown(mc.config, {"device_type", "perf_hint", "cache_dir",
+                                      "num_requests", "input_dtype"});
 
       g_logger->info("[model {}] Loading from: {}", m_idx, mc.file_path);
 
