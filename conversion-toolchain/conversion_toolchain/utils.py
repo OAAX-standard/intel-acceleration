@@ -179,6 +179,17 @@ def apply_preprocessing(model: ov.Model, config: OptimizationConfig, logs) -> ov
         if caller_type is not None:
             inp.tensor().set_element_type(caller_type)
 
+        # Per-channel mean/scale require a layout so OpenVINO knows which dim is C.
+        # Auto-set based on input rank: 4D → NCHW, 3D → CHW.
+        needs_layout = (isinstance(mean_values, list) and len(mean_values) > 1) or (
+            isinstance(scale_values, list) and len(scale_values) > 1
+        )
+        if needs_layout:
+            rank = len(model.input(i).get_partial_shape())
+            layout_map = {4: ov.Layout("NCHW"), 3: ov.Layout("CHW")}
+            if rank in layout_map:
+                inp.model().set_layout(layout_map[rank])
+
         steps = inp.preprocess()
 
         # Mean/scale ops require f32; insert a cast if the caller type isn't f32
