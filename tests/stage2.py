@@ -59,6 +59,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--csv", default="", help="Path to output CSV file")
     p.add_argument("--skip-runtime", action="store_true", help="Skip yolo_test section")
+    p.add_argument("--skip-bench", action="store_true", help="Skip benchmark_app section")
+    p.add_argument("--models", default="", help="Comma-separated model names to run (default: all)")
+    p.add_argument("--precisions", default="", help="Comma-separated precisions to run: FP32,FP16,INT8 (default: all)")
     return p.parse_args()
 
 
@@ -129,12 +132,17 @@ def build_yolo_test() -> bool:
 # ── Model discovery ────────────────────────────────────────────────────────────
 
 
-def get_compiled_models() -> list[tuple[Path, str, str]]:
+def get_compiled_models(
+    model_filter: set[str] | None = None, precision_filter: set[str] | None = None
+) -> list[tuple[Path, str, str]]:
+    allowed_models = model_filter or YOLO_MODELS
+    allowed_precisions = precision_filter or {"FP32", "FP16", "INT8"}
     return [
         (zip_path, zip_path.stem, zip_path.parent.name)
         for variant in ("FP32", "FP16", "INT8")
+        if variant in allowed_precisions
         for zip_path in sorted(COMPILED_DIR.glob(f"*/{variant}/*.zip"))
-        if zip_path.stem in YOLO_MODELS
+        if zip_path.stem in allowed_models
     ]
 
 
@@ -279,12 +287,14 @@ def main() -> None:
     args = parse_args()
     devices = [d.strip() for d in args.devices.split(",")]
     perf_hints = [h.strip() for h in args.perf_hints.split(",")]
+    model_filter = {m.strip() for m in args.models.split(",") if m.strip()} or None
+    precision_filter = {p.strip() for p in args.precisions.split(",") if p.strip()} or None
 
     if not COMPILED_DIR.exists() or not any(COMPILED_DIR.rglob("*.xml")):
         print("ERROR: tests/compiled_models/ not found or empty — run stage1 first")
         sys.exit(1)
 
-    models = get_compiled_models()
+    models = get_compiled_models(model_filter, precision_filter)
 
     csv_file = None
     csv_writer = None
@@ -309,7 +319,7 @@ def main() -> None:
 
     try:
         # ── benchmark_app ──────────────────────────────────────────────────────
-        bench = find_benchmark_app()
+        bench = None if args.skip_bench else find_benchmark_app()
         if bench:
             for hint in perf_hints:
                 header(f"Step 1: benchmark_app  (hint={hint}, {args.duration}s per run)")
