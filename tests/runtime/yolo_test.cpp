@@ -206,6 +206,7 @@ int main(int argc, char **argv) {
     int nireq = 0;  // 0 = use runtime default (optimal)
     int in_flight = 5;
     int imgsz = 640;
+    int log_level = 2;  // spdlog level: 0=trace 1=debug 2=info 3=warn 4=err
     bool test_queue_limit = false;
     bool validate_output_shape = true;
 
@@ -228,6 +229,8 @@ int main(int argc, char **argv) {
             imgsz = atoi(argv[++i]);
         else if (strcmp(argv[i], "--input-name") == 0 && i + 1 < argc)
             input_name = argv[++i];
+        else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc)
+            log_level = atoi(argv[++i]);
         else if (strcmp(argv[i], "--no-validate") == 0)
             validate_output_shape = false;
         else if (strcmp(argv[i], "--queue-limit-test") == 0)
@@ -253,8 +256,9 @@ int main(int argc, char **argv) {
     // ── 1. Init ───────────────────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
     std::string nireq_str = std::to_string(nireq);
+    std::string log_level_str = std::to_string(log_level);
     const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests", "input_dtype"};
-    const char *init_vals[] = {device, perf_hint, "2", nireq_str.c_str(), input_dtype_str};
+    const char *init_vals[] = {device, perf_hint, log_level_str.c_str(), nireq_str.c_str(), input_dtype_str};
     Config init_cfg = {5, init_keys, init_vals};
     CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
     std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;

@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runs", type=int, default=300, help="yolo_test inference runs")
     p.add_argument("--warmup", type=int, default=5, help="yolo_test warmup runs")
     p.add_argument("--in-flight", type=int, default=5, help="max parallel in-flight requests (yolo_test --in-flight)")
+    p.add_argument("--log-level", type=int, default=2, help="runtime log level: 0=trace 1=debug 2=info 3=warn 4=err")
     p.add_argument(
         "--perf-hints",
         default="throughput",
@@ -213,6 +214,7 @@ def run_yolo_test(
     perf_hint: str = "throughput",
     imgsz: int = 640,
     in_flight: int = 5,
+    log_level: int = 2,
 ) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
@@ -238,6 +240,8 @@ def run_yolo_test(
         cmd += ["--imgsz", str(imgsz)]
     if in_flight != 5:
         cmd += ["--in-flight", str(in_flight)]
+    if log_level != 2:
+        cmd += ["--log-level", str(log_level)]
     text = run_process(
         cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
@@ -373,6 +377,7 @@ def main() -> None:
                         perf_hint=hint,
                         imgsz=imgsz,
                         in_flight=args.in_flight,
+                        log_level=args.log_level,
                     )
                     if r:
                         print(_ROW.format(model, variant, device, *r))

@@ -16,6 +16,7 @@
 #                 e.g. "FP32 FP16"
 #   CSV           Path for CSV output                       (default: none)
 #   IN_FLIGHT     Max parallel in-flight requests            (default: 5)
+#   LOG_LEVEL     Runtime log level 0=trace..4=err           (default: 2/info)
 #   SKIP_BENCH    Set to 1 to skip benchmark_app section    (default: 0)
 #   SKIP_RUNTIME  Set to 1 to skip yolo_test section        (default: 0)
 
@@ -34,7 +35,8 @@ DURATION="${DURATION:-5}"
 MODELS="${MODELS:-yolo11n_320}"
 PRECISIONS="${PRECISIONS:-INT8}"
 CSV="${CSV:-}"
-IN_FLIGHT="${IN_FLIGHT:-5}"
+IN_FLIGHT="${IN_FLIGHT:-100}"
+LOG_LEVEL="${LOG_LEVEL:-2}"
 SKIP_BENCH="${SKIP_BENCH:-0}"
 SKIP_RUNTIME="${SKIP_RUNTIME:-0}"
 
@@ -49,6 +51,7 @@ echo "  MODELS      : ${MODELS:-<all>}"
 echo "  PRECISIONS  : ${PRECISIONS:-<all>}"
 echo "  CSV         : ${CSV:-<none>}"
 echo "  IN_FLIGHT   : ${IN_FLIGHT}"
+echo "  LOG_LEVEL   : ${LOG_LEVEL}"
 echo "  SKIP_BENCH  : ${SKIP_BENCH}"
 echo "  SKIP_RUNTIME: ${SKIP_RUNTIME}"
 echo ""
@@ -81,6 +84,7 @@ ARGS=(
 [[ -n "${PRECISIONS}" ]] && ARGS+=("--precisions" "$(to_csv "${PRECISIONS}")")
 [[ -n "${CSV}"        ]] && ARGS+=("--csv"        "${CSV}")
 ARGS+=("--in-flight" "${IN_FLIGHT}")
+ARGS+=("--log-level" "${LOG_LEVEL}")
 [[ "${SKIP_RUNTIME}" == "1" ]] && ARGS+=("--skip-runtime")
 [[ "${SKIP_BENCH}"   == "1" ]] && ARGS+=("--skip-bench")
 
