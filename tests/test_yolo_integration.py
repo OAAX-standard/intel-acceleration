@@ -290,3 +290,82 @@ def test_320_b4_output_is_finite(compiled_yolo_models_320_batch4, model_name, va
     xml = _get_320_b4(compiled_yolo_models_320_batch4, model_name, variant)
     output = _infer(xml, model_name)
     assert np.all(np.isfinite(output))
+
+
+# ── U8 preprocessing tests ────────────────────────────────────────────────────
+
+
+def _infer_u8(xml: Path, model_name: str) -> np.ndarray:
+    """Run inference with raw uint8 inputs [0, 255]."""
+    info = TEST_MODELS[model_name]
+    core = ov.Core()
+    compiled = core.compile_model(core.read_model(str(xml)), "CPU")
+    img = np.random.randint(0, 256, info["input_shape"], dtype=np.uint8)
+    req = compiled.create_infer_request()
+    req.set_input_tensor(ov.Tensor(img))
+    req.infer()
+    return req.get_output_tensor().data
+
+
+def test_u8_ir_input_type(compiled_yolo_models_u8):
+    """FP32_U8 IR has u8 as its input boundary type."""
+    xml = compiled_yolo_models_u8.get(("yolo11n", "FP32_U8"))
+    if xml is None:
+        pytest.skip("FP32_U8 variant not compiled")
+    model = ov.Core().read_model(str(xml))
+    assert (
+        model.inputs[0].get_element_type() == ov.Type.u8
+    ), f"Expected u8 input, got {model.inputs[0].get_element_type()}"
+
+
+def test_u8_output_shape(compiled_yolo_models_u8):
+    """FP32_U8 model produces correct YOLO output shape [1, 84, 8400] from u8 input."""
+    xml = compiled_yolo_models_u8.get(("yolo11n", "FP32_U8"))
+    if xml is None:
+        pytest.skip("FP32_U8 variant not compiled")
+    info = TEST_MODELS["yolo11n"]
+    output = _infer_u8(xml, "yolo11n")
+    assert output.shape == (
+        1,
+        info["output_channels"],
+        info["output_anchors"],
+    ), f"Unexpected output shape: {output.shape}"
+
+
+def test_u8_output_is_finite(compiled_yolo_models_u8):
+    """FP32_U8 model output contains no NaN or Inf values."""
+    xml = compiled_yolo_models_u8.get(("yolo11n", "FP32_U8"))
+    if xml is None:
+        pytest.skip("FP32_U8 variant not compiled")
+    output = _infer_u8(xml, "yolo11n")
+    assert np.all(np.isfinite(output)), "FP32_U8 output has NaN/Inf"
+
+
+def test_u8_matches_f32_baseline(compiled_yolo_models, compiled_yolo_models_u8):
+    """FP32_U8 model fed raw u8 pixels produces the same output as the FP32 baseline
+    fed manually-normalized f32 inputs (÷255), within float32 tolerance."""
+    xml_fp32 = compiled_yolo_models.get(("yolo11n", "FP32"))
+    xml_u8 = compiled_yolo_models_u8.get(("yolo11n", "FP32_U8"))
+    if xml_fp32 is None or xml_u8 is None:
+        pytest.skip("FP32 or FP32_U8 variant not compiled")
+
+    np.random.seed(0)
+    info = TEST_MODELS["yolo11n"]
+    pixels_u8 = np.random.randint(0, 256, info["input_shape"], dtype=np.uint8)
+    pixels_f32 = pixels_u8.astype(np.float32) / 255.0
+
+    core = ov.Core()
+
+    compiled_fp32 = core.compile_model(core.read_model(str(xml_fp32)), "CPU")
+    req = compiled_fp32.create_infer_request()
+    req.set_input_tensor(ov.Tensor(pixels_f32))
+    req.infer()
+    ref = req.get_output_tensor().data
+
+    compiled_u8 = core.compile_model(core.read_model(str(xml_u8)), "CPU")
+    req = compiled_u8.create_infer_request()
+    req.set_input_tensor(ov.Tensor(pixels_u8))
+    req.infer()
+    out = req.get_output_tensor().data
+
+    np.testing.assert_allclose(ref, out, rtol=1e-4, atol=1e-4, err_msg="FP32_U8 output should match FP32 baseline")

@@ -32,6 +32,11 @@ _CONFIGS = {
             "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
         }
     },
+    # FP32 model with ÷255 normalisation and u8 input boundary baked into the IR.
+    "FP32_U8": {
+        "optimization": {"fp16_compression": False},
+        "preprocessing": {"input_dtype": "u8", "scale_values": [255.0, 255.0, 255.0]},
+    },
 }
 
 _CONFIGS_B4 = {
@@ -263,6 +268,50 @@ def compiled_yolo_models_320_batch4(calibration_dir: Path) -> dict:
                 calibration_dir if variant == "INT8" else None,
             )
             result[(model_name, variant)] = xml
+
+    return result
+
+
+@pytest.fixture(scope="session")
+def compiled_yolo_models_u8(calibration_dir: Path) -> dict:
+    """
+    Convert yolo11n with FP32_U8 preprocessing (u8 input boundary, ÷255 baked in)
+    via Docker toolchain. Returns {(model_name, "FP32_U8"): Path-to-xml}.
+    Only yolo11n is converted — we test the feature, not model variety.
+    """
+    if not _docker_image_available():
+        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
+
+    try:
+        import ultralytics  # noqa: F401
+    except ImportError:
+        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
+
+    onnx_dir = COMPILED_DIR / "onnx"
+    onnx_dir.mkdir(parents=True, exist_ok=True)
+
+    result = {}
+    for model_name in ["yolo11n"]:
+        onnx = Path(download_model(model_name, str(onnx_dir)))
+        config = _CONFIGS["FP32_U8"]
+        xml = COMPILED_DIR / model_name / "FP32_U8" / f"{model_name}.xml"
+        if xml.exists():
+            zip_path = xml.with_suffix(".zip")
+            if not zip_path.exists() and xml.with_suffix(".bin").exists():
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(xml, arcname=xml.name)
+                    zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
+            result[(model_name, "FP32_U8")] = xml
+            continue
+        _convert_with_docker(
+            model_name,
+            "FP32_U8",
+            onnx,
+            COMPILED_DIR / model_name / "FP32_U8",
+            config,
+            None,
+        )
+        result[(model_name, "FP32_U8")] = xml
 
     return result
 

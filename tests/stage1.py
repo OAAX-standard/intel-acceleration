@@ -60,6 +60,13 @@ def main() -> None:
         check=True,
     )
 
+    header("Step 6: YOLO u8 preprocessing integration tests")
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "u8"],
+        cwd=ROOT,
+        check=True,
+    )
+
     print("\nStage 1 complete — compiled models saved to tests/compiled_models/")
 
 
