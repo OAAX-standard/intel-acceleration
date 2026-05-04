@@ -68,7 +68,8 @@ static void free_tensors(Tensors *t) {
     free(t);
 }
 
-static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dtype, int imgsz) {
+static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dtype, int imgsz,
+                                const char *input_name = "images") {
     Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
     if (!ts) return nullptr;
     ts->id = request_id;
@@ -80,7 +81,7 @@ static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dty
     }
 
     TensorDescriptor &td = ts->tensors[0];
-    td.name = strdup("images");
+    td.name = strdup(input_name);
     td.data_type = dtype;
     td.rank = 4;
     td.shape = (int *)malloc(4 * sizeof(int));
@@ -124,7 +125,8 @@ static double percentile(std::vector<double> v, double p) {
  * Returns per-request latencies (ms), or empty on failure.
  */
 static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send_times, bool validate_first, int batch,
-                                     TensorElementType dtype, int imgsz, int max_in_flight = 1) {
+                                     TensorElementType dtype, int imgsz, int max_in_flight = 1,
+                                     const char *input_name = "images") {
     std::vector<double> latencies(n);
     std::atomic<bool> ok{true};
     std::atomic<int> in_flight{0};
@@ -135,7 +137,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
                 if (!ok) return;
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
-            Tensors *input = make_yolo_input(batch, i, dtype, imgsz);
+            Tensors *input = make_yolo_input(batch, i, dtype, imgsz, input_name);
             if (!input) {
                 ok = false;
                 return;
@@ -158,7 +160,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
             RuntimeStatus st;
             do {
                 if (!ok) return;
-                st = runtime_retrieve_output(&model_id, &output, 1);
+                st = runtime_retrieve_output(&model_id, &output, 1000);
             } while (st == RUNTIME_STATUS_NO_OUTPUT_AVAILABLE);
 
             if (st != RUNTIME_STATUS_SUCCESS) {
@@ -197,6 +199,7 @@ int main(int argc, char **argv) {
     const char *device = "CPU";
     const char *perf_hint = "latency";
     const char *input_dtype_str = "f32";
+    const char *input_name = "images";
     int runs = 30;
     int warmup = 5;
     int batch = 1;
@@ -204,6 +207,7 @@ int main(int argc, char **argv) {
     int in_flight = 5;
     int imgsz = 640;
     bool test_queue_limit = false;
+    bool validate_output_shape = true;
 
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc)
@@ -222,6 +226,10 @@ int main(int argc, char **argv) {
             in_flight = atoi(argv[++i]);
         else if (strcmp(argv[i], "--imgsz") == 0 && i + 1 < argc)
             imgsz = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--input-name") == 0 && i + 1 < argc)
+            input_name = argv[++i];
+        else if (strcmp(argv[i], "--no-validate") == 0)
+            validate_output_shape = false;
         else if (strcmp(argv[i], "--queue-limit-test") == 0)
             test_queue_limit = true;
         else
@@ -236,6 +244,7 @@ int main(int argc, char **argv) {
     std::cout << "Batch     : " << batch << std::endl;
     std::cout << "nireq     : " << (nireq > 0 ? std::to_string(nireq) : "auto") << std::endl;
     std::cout << "Input dtype: " << input_dtype_str << std::endl;
+    std::cout << "Input name : " << input_name << std::endl;
     std::cout << "In-flight  : " << in_flight << std::endl;
     std::cout << "Image size : " << imgsz << "x" << imgsz << std::endl;
     std::cout << "Warmup    : " << warmup << " runs" << std::endl;
@@ -244,11 +253,9 @@ int main(int argc, char **argv) {
     // ── 1. Init ───────────────────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
     std::string nireq_str = std::to_string(nireq);
-    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests"};
-    const char *init_vals[] = {device, perf_hint, "2", nireq_str.c_str()};
-    Config init_cfg = {4, init_keys, init_vals};
-    const char *mc_keys[] = {"input_dtype"};
-    const char *mc_vals[] = {input_dtype_str};
+    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests", "input_dtype"};
+    const char *init_vals[] = {device, perf_hint, "2", nireq_str.c_str(), input_dtype_str};
+    Config init_cfg = {5, init_keys, init_vals};
     CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
     std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;
 
@@ -257,7 +264,7 @@ int main(int argc, char **argv) {
     auto tload = Clock::now();
     ModelConfig mc{};
     mc.file_path = model_path;
-    mc.config = {1, mc_keys, mc_vals};
+    mc.config = {0, nullptr, nullptr};
     CHECK(runtime_load_models(1, &mc) == RUNTIME_STATUS_SUCCESS,
           std::string("runtime_load_models failed: ") + (runtime_get_error() ? runtime_get_error() : ""));
     double load_ms = Ms(Clock::now() - tload).count();
@@ -267,7 +274,7 @@ int main(int argc, char **argv) {
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false, batch, input_dtype, imgsz, in_flight).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, batch, input_dtype, imgsz, in_flight, input_name).empty(), "warmup failed");
     }
     std::cout << "  Done" << std::endl;
 
@@ -276,7 +283,8 @@ int main(int argc, char **argv) {
               << std::endl;
     std::vector<Clock::time_point> send_times(runs);
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true, batch, input_dtype, imgsz, in_flight);
+    auto latencies =
+        run_batch(runs, send_times, validate_output_shape, batch, input_dtype, imgsz, in_flight, input_name);
     double bench_ms = Ms(Clock::now() - bench_start).count();
     CHECK(!latencies.empty(), "benchmark failed");
 
@@ -309,16 +317,14 @@ int main(int argc, char **argv) {
         const int QUEUE_LIMIT = 3;
         const int FLOOD = 20;
         std::string ql_str = std::to_string(QUEUE_LIMIT);
-        const char *ql_keys[] = {"device_type", "log_level", "num_requests", "max_queue_size"};
-        const char *ql_vals[] = {device, "2", "1", ql_str.c_str()};
-        Config ql_cfg = {4, ql_keys, ql_vals};
+        const char *ql_keys[] = {"device_type", "log_level", "num_requests", "max_queue_size", "input_dtype"};
+        const char *ql_vals[] = {device, "2", "1", ql_str.c_str(), input_dtype_str};
+        Config ql_cfg = {5, ql_keys, ql_vals};
         CHECK(runtime_init(ql_cfg) == RUNTIME_STATUS_SUCCESS, "queue-limit re-init failed");
 
         ModelConfig ql_mc{};
         ql_mc.file_path = model_path;
-        const char *ql_mc_keys[] = {"input_dtype"};
-        const char *ql_mc_vals[] = {input_dtype_str};
-        ql_mc.config = {1, ql_mc_keys, ql_mc_vals};
+        ql_mc.config = {0, nullptr, nullptr};
         CHECK(runtime_load_models(1, &ql_mc) == RUNTIME_STATUS_SUCCESS, "queue-limit model load failed");
 
         int rejected = 0;

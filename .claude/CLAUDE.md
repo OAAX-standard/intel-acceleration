@@ -110,6 +110,7 @@ When `device_type="GPU"` and multiple GPU devices are present, the runtime autom
 | `cache_dir` | `"."` (CWD) | OpenVINO compiled-model cache. Set to `""` to disable. |
 | `log_stdout` | `"0"` | Set to `"1"` to also print logs to stdout (default: file only). |
 | `max_queue_size` | `"100"` | Max pending items in the input and output queues. New inputs are rejected with a warning when either queue reaches this limit. Set to `"0"` to disable. |
+| `input_dtype` | `"f32"` | Input tensor dtype expected from the caller: `"f32"`, `"u8"`, `"f16"`. A PrePostProcessor conversion to the model's native type is inserted at compile time. |
 
 **Output ownership:** caller owns `Tensors*` returned by `runtime_retrieve_output` and must free
 `tensors[i].name`, `tensors[i].shape`, `tensors[i].data`, `tensors`, and the `Tensors` struct itself.

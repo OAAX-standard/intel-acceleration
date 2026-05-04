@@ -150,6 +150,7 @@ static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
 static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
 static int g_max_queue_size = 100;
+static std::string g_input_dtype = "f32";
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -512,9 +513,13 @@ RuntimeStatus runtime_init(Config config) {
       g_logger->info("  cache_dir: (disabled)");
     }
 
+    g_input_dtype = config_get(config, "input_dtype", "f32");
+    g_logger->info("  input_dtype: {}", g_input_dtype);
+
     config_warn_unknown(
-        config, {"log_level", "log_file", "log_stdout", "device_type",
-                 "perf_hint", "cache_dir", "num_requests", "max_queue_size"});
+        config,
+        {"log_level", "log_file", "log_stdout", "device_type", "perf_hint",
+         "cache_dir", "num_requests", "max_queue_size", "input_dtype"});
     log_available_devices();
     g_initialized = true;
     return RUNTIME_STATUS_SUCCESS;
@@ -557,8 +562,8 @@ RuntimeStatus runtime_load_models(int num_models,
       std::string device = config_get(mc.config, "device_type", g_device_type);
       std::string hint = config_get(mc.config, "perf_hint", g_perf_hint);
       std::string cdir = config_get(mc.config, "cache_dir", g_cache_dir);
-      config_warn_unknown(mc.config, {"device_type", "perf_hint", "cache_dir",
-                                      "num_requests", "input_dtype"});
+      config_warn_unknown(
+          mc.config, {"device_type", "perf_hint", "cache_dir", "num_requests"});
 
       g_logger->info("[model {}] Loading from: {}", m_idx, mc.file_path);
 
@@ -575,12 +580,11 @@ RuntimeStatus runtime_load_models(int num_models,
       auto model = g_core->read_model(xml_path);
 
       // Optional input dtype preprocessing (e.g. "u8" for INT8 models)
-      std::string input_dtype_str = config_get(mc.config, "input_dtype", "f32");
-      if (input_dtype_str != "f32") {
+      if (g_input_dtype != "f32") {
         ov::element::Type caller_type = ov::element::dynamic;
-        if (input_dtype_str == "u8")
+        if (g_input_dtype == "u8")
           caller_type = ov::element::u8;
-        else if (input_dtype_str == "f16")
+        else if (g_input_dtype == "f16")
           caller_type = ov::element::f16;
         if (!caller_type.is_dynamic()) {
           ov::preprocess::PrePostProcessor ppp(model);
@@ -591,7 +595,7 @@ RuntimeStatus runtime_load_models(int num_models,
           }
           model = ppp.build();
           g_logger->info("[model {}] Input dtype: {} (converted to model type)",
-                         m_idx, input_dtype_str);
+                         m_idx, g_input_dtype);
         }
       }
 
