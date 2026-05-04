@@ -75,8 +75,10 @@ std::shared_ptr<spdlog::logger> initialize_logger(const std::string &log_file,
                                                   int console_level,
                                                   const std::string prefix) {
   try {
+    // rotate_on_open=true: each launch starts a fresh runtime.log; the previous
+    // three sessions are kept as runtime.1.log / .2.log / .3.log.
     auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
-        log_file, 1024 * 1024 * 5, 3);
+        log_file, 1024 * 1024 * 5, 4, true);
     file_sink->set_level(static_cast<spdlog::level::level_enum>(file_level));
 
     spdlog::sinks_init_list sinks;
