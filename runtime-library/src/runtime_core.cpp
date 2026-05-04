@@ -325,6 +325,8 @@ static void on_inference_complete(int model_id, int slot_idx,
   // Cold path: slot goes idle; manager will pair it with the next enqueue call.
   Tensors* next = nullptr;
   if (!m.stop && m.input_queue.try_dequeue(next)) {
+    g_logger->debug("[model {} slot {}] Input dequeued (input_queue={})",
+                    model_id, slot_idx, m.input_queue.size_approx());
     dispatch_to_slot(model_id, slot_idx, next);
   } else {
     m.free_slots.enqueue(slot_idx);
@@ -332,7 +334,8 @@ static void on_inference_complete(int model_id, int slot_idx,
 
   if (output && g_output_queue.try_enqueue({model_id, output})) {
     sem_post(&g_output_sem);
-    g_logger->debug("[model {} slot {}] Output enqueued.", model_id, slot_idx);
+    g_logger->debug("[model {} slot {}] Output enqueued (output_queue={})",
+                    model_id, slot_idx, g_output_queue.size_approx());
   } else {
     g_logger->error("[model {} slot {}] Failed to enqueue output — dropping.",
                     model_id, slot_idx);
@@ -368,6 +371,8 @@ static void manager_loop(int model_id) {
       m.free_slots.enqueue(slot_idx);  // put slot back
       continue;
     }
+    g_logger->debug("[model {} slot {}] Input dequeued (input_queue={})",
+                    model_id, slot_idx, m.input_queue.size_approx());
 
     dispatch_to_slot(model_id, slot_idx, input);
   }
@@ -775,6 +780,8 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   }
   sem_post(&m.input_sem);
 
+  g_logger->debug("[model {}] Input enqueued id={} (input_queue={})", model_id,
+                  input_tensors->id, m.input_queue.size_approx());
   g_logger->trace("[enqueue model={} id={}] slow path {}µs", model_id,
                   input_tensors->id, elapsed_us(t0));
   return RUNTIME_STATUS_SUCCESS;
@@ -805,8 +812,9 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
 
   *model_id = item.model_id;
   *output_tensors = item.tensors;
-  g_logger->debug("[model {}] Output retrieved (id={})", item.model_id,
-                  item.tensors->id);
+  g_logger->debug("[model {}] Output retrieved id={} (output_queue={})",
+                  item.model_id, item.tensors->id,
+                  g_output_queue.size_approx());
   g_logger->trace("[retrieve model={} id={}] {}µs", item.model_id,
                   item.tensors->id, elapsed_us(t0));
   return RUNTIME_STATUS_SUCCESS;
