@@ -73,10 +73,24 @@ cd tests/runtime/build && ./multi_model_test <model.zip> [model2.zip]
 - `conversion_toolchain/main.py` — CLI entrypoint, handles all exit codes
 - `conversion_toolchain/utils.py` — OpenVINO `convert_model()`, FP16/INT8, zip I/O
 - `conversion_toolchain/quantization.py` — NNCF INT8 quantization
-- `conversion_toolchain/config.py` — `OptimizationConfig` (FP16 compression, quantization)
+- `conversion_toolchain/config.py` — `OptimizationConfig` (FP16 compression, quantization, preprocessing)
 - `conversion_toolchain/logger.py` — JSON structured logging (`Logs` class)
 
 Input: `.onnx` or `.zip` bundle (may contain `model.onnx`, `config.json`, `calibration/`). Output: `.zip` of OpenVINO IR + `logs.json`.
+
+**config.json `preprocessing` keys** (all optional, baked into IR via PPP before quantization):
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `input_dtype` | `null` | Model input boundary type: `"u8"`, `"f16"`, `"f32"`. Lets callers feed raw pixels without manual conversion. |
+| `mean_values` | `null` | Per-channel means to subtract (after cast to f32), e.g. `[123.675, 116.28, 103.53]` |
+| `scale_values` | `null` | Per-channel divisors, e.g. `[255.0, 255.0, 255.0]` to normalise u8→[0,1] |
+
+Example — bake u8 input + ÷255 normalisation into the IR:
+```json
+{ "preprocessing": { "input_dtype": "u8", "scale_values": [255.0, 255.0, 255.0] } }
+```
+When quantization is also enabled, calibration images are fed in the configured format so NNCF statistics stay consistent.
 
 **Exit codes:** 0=success, 1=file not found, 2=invalid input, 3=conversion failed, 4=I/O error, 255=unexpected.
 

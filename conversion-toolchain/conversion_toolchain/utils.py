@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import openvino as ov
+from openvino.preprocess import PrePostProcessor
 
 from .config import OptimizationConfig
 from .quantization import is_nncf_available, quantize_model
@@ -153,6 +154,59 @@ def extract_input_bundle(input_zip: str, extract_dir: str, logs=None) -> tuple[s
     return onnx_path, config_path, calibration_dir
 
 
+_DTYPE_MAP = {
+    "u8": ov.Type.u8,
+    "f16": ov.Type.f16,
+    "f32": ov.Type.f32,
+}
+
+
+def apply_preprocessing(model: ov.Model, config: OptimizationConfig, logs) -> ov.Model:
+    """Bake input dtype conversion, mean subtraction, and scale division into the model graph."""
+    if not config.has_preprocessing():
+        return model
+
+    input_dtype = config.get_preprocessing_input_dtype()
+    mean_values = config.get_mean_values()
+    scale_values = config.get_scale_values()
+    caller_type = _DTYPE_MAP.get(input_dtype) if input_dtype else None
+
+    ppp = PrePostProcessor(model)
+    for i in range(len(model.inputs)):
+        model_type = model.input(i).get_element_type()
+        inp = ppp.input(i)
+
+        if caller_type is not None:
+            inp.tensor().set_element_type(caller_type)
+
+        steps = inp.preprocess()
+
+        # Mean/scale ops require f32; insert a cast if the caller type isn't f32
+        if caller_type is not None and caller_type != ov.Type.f32 and (mean_values or scale_values):
+            steps.convert_element_type(ov.Type.f32)
+
+        if mean_values:
+            steps.mean(mean_values)
+
+        if scale_values:
+            steps.scale(scale_values)
+
+        # Convert to the model's original element type if it differs from f32
+        if model_type != ov.Type.f32:
+            steps.convert_element_type(model_type)
+
+    model = ppp.build()
+    logs.add_message(
+        "Preprocessing baked into model",
+        {
+            "input_dtype": input_dtype or "(unchanged)",
+            "mean_values": mean_values,
+            "scale_values": scale_values,
+        },
+    )
+    return model
+
+
 def convert_to_ir(
     onnx_path: str, output_dir: str, logs, config: OptimizationConfig | None = None, calibration_dir: str | None = None
 ):
@@ -240,6 +294,10 @@ def convert_to_ir(
 
         logs.add_message("Successfully converted to OpenVINO IR format")
 
+        # Bake preprocessing (dtype conversion, mean, scale) into the graph before quantization
+        # so NNCF calibrates against the same input format used at inference time.
+        model = apply_preprocessing(model, config, logs)
+
         # Apply quantization if enabled
         if config.is_quantization_enabled():
             if not is_nncf_available():
@@ -260,6 +318,7 @@ def convert_to_ir(
                     preset=config.get_quantization_preset(),
                     subset_size=config.get_quantization_subset_size(),
                     logs=logs,
+                    input_dtype=config.get_preprocessing_input_dtype() or "f32",
                 )
 
         # Generate output paths

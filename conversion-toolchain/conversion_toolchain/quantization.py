@@ -33,7 +33,7 @@ class CalibrationDataLoader:
 
     SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
-    def __init__(self, calibration_dir: str, input_shape: list[int] | None = None):
+    def __init__(self, calibration_dir: str, input_shape: list[int] | None = None, input_dtype: str = "f32"):
         """
         Initialize calibration data loader
 
@@ -41,9 +41,13 @@ class CalibrationDataLoader:
             calibration_dir: Directory containing calibration images
             input_shape: Expected input shape [batch, channels, height, width]
                         If None, will infer from first image
+            input_dtype: Element type expected by the model boundary ("f32" or "u8").
+                        When "u8", images are returned as raw uint8 [0,255] — the model
+                        is responsible for normalization (e.g. via baked-in PPP).
         """
         self.calibration_dir = Path(calibration_dir)
         self.input_shape = input_shape
+        self.input_dtype = input_dtype
         self.image_files = self._find_images()
 
         if not self.image_files:
@@ -83,13 +87,13 @@ class CalibrationDataLoader:
         # Resize image
         img = img.resize((target_width, target_height), Image.Resampling.BILINEAR)
 
-        # Convert to numpy array
-        img_array = np.array(img, dtype=np.float32)
+        # Convert HWC to CHW; keep as u8 or normalise to [0,1] f32
+        # depending on what the model's input boundary expects.
+        if self.input_dtype == "u8":
+            img_array = np.array(img, dtype=np.uint8)
+        else:
+            img_array = np.array(img, dtype=np.float32) / 255.0
 
-        # Normalize to [0, 1]
-        img_array = img_array / 255.0
-
-        # Convert HWC to CHW (Height, Width, Channels -> Channels, Height, Width)
         img_array = np.transpose(img_array, (2, 0, 1))
 
         # Add batch dimension; tile to match model's fixed batch size if > 1
@@ -128,7 +132,12 @@ class CalibrationDataLoader:
 
 
 def quantize_model(
-    model: ov.Model, calibration_dir: str, preset: str = "mixed", subset_size: int = 300, logs=None
+    model: ov.Model,
+    calibration_dir: str,
+    preset: str = "mixed",
+    subset_size: int = 300,
+    logs=None,
+    input_dtype: str = "f32",
 ) -> ov.Model:
     """
     Quantize OpenVINO model to INT8 using NNCF
@@ -168,7 +177,7 @@ def quantize_model(
 
     # Load calibration data
     try:
-        data_loader = CalibrationDataLoader(calibration_dir, input_shape)
+        data_loader = CalibrationDataLoader(calibration_dir, input_shape, input_dtype)
         if logs:
             logs.add_message(
                 "Calibration data loaded",
