@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration", type=int, default=10, help="benchmark_app duration in seconds")
     p.add_argument("--runs", type=int, default=300, help="yolo_test inference runs")
     p.add_argument("--warmup", type=int, default=5, help="yolo_test warmup runs")
+    p.add_argument("--in-flight", type=int, default=5, help="max parallel in-flight requests (yolo_test --in-flight)")
     p.add_argument(
         "--perf-hints",
         default="throughput",
@@ -204,7 +205,14 @@ def run_benchmark_app(xml: Path, device: str, duration: int, perf_hint: str = "t
 
 
 def run_yolo_test(
-    zip_path: Path, device: str, warmup: int, runs: int, batch: int = 1, perf_hint: str = "throughput", imgsz: int = 640
+    zip_path: Path,
+    device: str,
+    warmup: int,
+    runs: int,
+    batch: int = 1,
+    perf_hint: str = "throughput",
+    imgsz: int = 640,
+    in_flight: int = 5,
 ) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
@@ -228,6 +236,8 @@ def run_yolo_test(
         cmd += ["--batch", str(batch)]
     if imgsz != 640:
         cmd += ["--imgsz", str(imgsz)]
+    if in_flight != 5:
+        cmd += ["--in-flight", str(in_flight)]
     text = run_process(
         cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
@@ -355,7 +365,14 @@ def main() -> None:
                 imgsz = 320 if "_320" in model else 640
                 for device in devices:
                     r = run_yolo_test(
-                        zip_path, device, args.warmup, args.runs, batch=batch, perf_hint=hint, imgsz=imgsz
+                        zip_path,
+                        device,
+                        args.warmup,
+                        args.runs,
+                        batch=batch,
+                        perf_hint=hint,
+                        imgsz=imgsz,
+                        in_flight=args.in_flight,
                     )
                     if r:
                         print(_ROW.format(model, variant, device, *r))

@@ -15,6 +15,7 @@
 #   PRECISIONS    Space-separated precision filter          (default: all)
 #                 e.g. "FP32 FP16"
 #   CSV           Path for CSV output                       (default: none)
+#   IN_FLIGHT     Max parallel in-flight requests            (default: 5)
 #   SKIP_BENCH    Set to 1 to skip benchmark_app section    (default: 0)
 #   SKIP_RUNTIME  Set to 1 to skip yolo_test section        (default: 0)
 
@@ -27,12 +28,13 @@ VENV="${ROOT}/.venv"
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEVICES="${DEVICES:-CPU}"
 PERF_HINTS="${PERF_HINTS:-throughput}"
-RUNS="${RUNS:-1000}"
+RUNS="${RUNS:-2000}"
 WARMUP="${WARMUP:-100}"
-DURATION="${DURATION:-1}"
-MODELS="${MODELS:-yolo11n_320_b4}"
+DURATION="${DURATION:-5}"
+MODELS="${MODELS:-yolo11n_320}"
 PRECISIONS="${PRECISIONS:-INT8}"
 CSV="${CSV:-}"
+IN_FLIGHT="${IN_FLIGHT:-5}"
 SKIP_BENCH="${SKIP_BENCH:-0}"
 SKIP_RUNTIME="${SKIP_RUNTIME:-0}"
 
@@ -46,6 +48,7 @@ echo "  DURATION    : ${DURATION}s"
 echo "  MODELS      : ${MODELS:-<all>}"
 echo "  PRECISIONS  : ${PRECISIONS:-<all>}"
 echo "  CSV         : ${CSV:-<none>}"
+echo "  IN_FLIGHT   : ${IN_FLIGHT}"
 echo "  SKIP_BENCH  : ${SKIP_BENCH}"
 echo "  SKIP_RUNTIME: ${SKIP_RUNTIME}"
 echo ""
@@ -77,6 +80,7 @@ ARGS=(
 [[ -n "${MODELS}"     ]] && ARGS+=("--models"     "$(to_csv "${MODELS}")")
 [[ -n "${PRECISIONS}" ]] && ARGS+=("--precisions" "$(to_csv "${PRECISIONS}")")
 [[ -n "${CSV}"        ]] && ARGS+=("--csv"        "${CSV}")
+ARGS+=("--in-flight" "${IN_FLIGHT}")
 [[ "${SKIP_RUNTIME}" == "1" ]] && ARGS+=("--skip-runtime")
 [[ "${SKIP_BENCH}"   == "1" ]] && ARGS+=("--skip-bench")
 
