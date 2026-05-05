@@ -34,7 +34,8 @@ cmake .. \
     -DPLATFORM=X86_64 \
     -DCMAKE_BUILD_TYPE=Release \
     -DRUNTIME_VERSION="$RUNTIME_VERSION" \
-    -DOPENVINO_DIR="$OPENVINO_DIR"
+    -DOPENVINO_DIR="$OPENVINO_DIR" \
+    -DOAAX_PROFILE=ON
 
 make -j "$(nproc)"
 
