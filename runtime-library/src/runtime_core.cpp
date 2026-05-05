@@ -660,6 +660,13 @@ RuntimeStatus runtime_init(Config config) {
         {"log_level", "log_file", "log_stdout", "device_type", "perf_hint",
          "cache_dir", "num_requests", "max_queue_size", "input_dtype"});
     log_available_devices();
+    // Initialize the output semaphore here so it is always ready before any
+    // thread can call runtime_retrieve_output (which only checks
+    // g_initialized). Initializing it inside runtime_load_models is too late: a
+    // caller that starts a consumer thread right after runtime_init can reach
+    // sem_timedwait before sem_init runs, and the subsequent sem_init memset
+    // wipes the nwaiters field, causing sem_post to never issue futex_wake.
+    sem_init(&g_output_sem, 0, 0);
     g_initialized = true;
     return RUNTIME_STATUS_SUCCESS;
   } catch (const std::exception& e) {
@@ -684,8 +691,6 @@ RuntimeStatus runtime_load_models(int num_models,
     set_error("runtime_load_models: invalid arguments");
     return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
-
-  sem_init(&g_output_sem, 0, 0);
 
   // Load each model; on any failure clean up already-created models
   for (int m_idx = 0; m_idx < num_models; ++m_idx) {
@@ -841,8 +846,7 @@ fail:
     delete ms;
   }
   g_models.clear();
-  sem_destroy(&g_output_sem);
-  // Drain any stray output items
+  // Drain any stray output items (sem_destroy is handled by runtime_cleanup)
   OutputItem item;
   while (g_output_queue.try_dequeue(item)) deep_free_tensors(item.tensors);
   return RUNTIME_STATUS_ERROR;
@@ -938,6 +942,7 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
 RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
                                       int timeout_ms) {
   if (!g_initialized) return RUNTIME_STATUS_NOT_INITIALIZED;
+  if (!g_models_loaded) return RUNTIME_STATUS_MODEL_NOT_LOADED;
   if (!model_id || !output_tensors) {
     set_error("runtime_retrieve_output: null output parameter");
     return RUNTIME_STATUS_INVALID_ARGUMENT;
