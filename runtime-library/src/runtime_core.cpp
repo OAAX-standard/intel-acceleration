@@ -951,11 +951,24 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
     return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
   }
 
+  // sem_wait succeeded so the enqueue side already ran try_enqueue + sem_post.
+  // The item is in the queue but may not be visible yet due to lock-free
+  // ordering. Spin briefly before giving up; restore the semaphore count if we
+  // ultimately miss so the deficit doesn't accumulate.
   OutputItem item;
-  if (!g_output_queue.try_dequeue(item)) {
-    // Semaphore signalled but queue empty — shouldn't happen, but handle it.
-    g_logger->trace("[retrieve] dequeue miss {}µs", elapsed_us(t0));
-    return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
+  {
+    int retries = 0;
+    while (!g_output_queue.try_dequeue(item)) {
+      if (++retries > 200) {
+        sem_post(&g_output_sem);
+        g_logger->warn(
+            "[retrieve] dequeue miss after {} retries — semaphore restored "
+            "{}µs",
+            retries, elapsed_us(t0));
+        return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
+      }
+      std::this_thread::yield();
+    }
   }
 
   *model_id = item.model_id;
