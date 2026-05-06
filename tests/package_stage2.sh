@@ -61,6 +61,7 @@ done
 # ── Archive ────────────────────────────────────────────────────────────────────
 
 echo "Creating archive $ARCHIVE..."
+rm "$ARCHIVE" || true
 tar czf "$ARCHIVE" -C "$ROOT" stage2_package
 
 SIZE=$(du -sh "$ARCHIVE" | cut -f1)

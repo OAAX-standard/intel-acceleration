@@ -257,9 +257,9 @@ int main(int argc, char **argv) {
     std::cout << "[1] Initializing runtime..." << std::endl;
     std::string nireq_str = std::to_string(nireq);
     std::string log_level_str = std::to_string(log_level);
-    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests", "input_dtype"};
-    const char *init_vals[] = {device, perf_hint, log_level_str.c_str(), nireq_str.c_str(), input_dtype_str};
-    Config init_cfg = {5, init_keys, init_vals};
+    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests"};
+    const char *init_vals[] = {device, perf_hint, log_level_str.c_str(), nireq_str.c_str()};
+    Config init_cfg = {4, init_keys, init_vals};
     CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
     std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;
 

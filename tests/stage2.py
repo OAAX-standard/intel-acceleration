@@ -39,6 +39,10 @@ YOLO_MODELS = {
     "yolo11s_320",
     "yolo11n_320_b4",
     "yolo11s_320_b4",
+    "yolo26s",
+    "yolo26s_320",
+    "yolo26m",
+    "yolo26m_320",
 }
 
 
@@ -215,6 +219,8 @@ def run_yolo_test(
     imgsz: int = 640,
     in_flight: int = 5,
     log_level: int = 2,
+    no_validate: bool = False,
+    input_dtype: str = "f32",
 ) -> tuple | None:
     binary = yolo_test_path()
     if not binary.exists():
@@ -242,6 +248,10 @@ def run_yolo_test(
         cmd += ["--in-flight", str(in_flight)]
     if log_level != 2:
         cmd += ["--log-level", str(log_level)]
+    if no_validate:
+        cmd += ["--no-validate"]
+    if input_dtype != "f32":
+        cmd += ["--input-dtype", input_dtype]
     text = run_process(
         cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
@@ -367,6 +377,16 @@ def main() -> None:
             for zip_path, model, variant in models:
                 batch = 4 if model.endswith("_b4") else 1
                 imgsz = 320 if "_320" in model else 640
+                # yolo26 models have a non-standard [1,300,6] output; skip the shape check
+                no_validate = model.startswith("yolo26")
+                # Match the input dtype baked into the IR by the toolchain:
+                # INT8 → u8, FP16 → f16, FP32 → f32
+                if variant == "INT8":
+                    input_dtype = "u8"
+                elif variant == "FP16":
+                    input_dtype = "f16"
+                else:
+                    input_dtype = "f32"
                 for device in devices:
                     r = run_yolo_test(
                         zip_path,
@@ -378,6 +398,8 @@ def main() -> None:
                         imgsz=imgsz,
                         in_flight=args.in_flight,
                         log_level=args.log_level,
+                        no_validate=no_validate,
+                        input_dtype=input_dtype,
                     )
                     if r:
                         print(_ROW.format(model, variant, device, *r))

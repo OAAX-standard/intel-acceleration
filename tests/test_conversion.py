@@ -148,8 +148,9 @@ class TestRealModels:
         # Get input shape from model info
         input_shape = real_model["info"]["input_shape"]
 
-        # Create dummy input
-        input_data = np.random.randn(*input_shape).astype(np.float32)
+        # Create dummy input — use the model's actual input element type (may be f16 after auto-bake)
+        input_dtype = compiled_model.input(0).element_type.to_dtype()
+        input_data = np.random.randn(*input_shape).astype(input_dtype)
 
         # Run inference
         infer_request = compiled_model.create_infer_request()
@@ -677,9 +678,10 @@ class TestPreprocessingConversion:
         assert model.inputs[0].get_element_type() == ov.Type.u8, "Input type should be u8"
 
     def test_no_preprocessing_input_type_unchanged(self, mobilenet_path, temp_dir):
-        """Without preprocessing config, the IR keeps its original f32 input type."""
+        """Without preprocessing config and without FP16 compression, the IR keeps its original f32 input type."""
         logs = Logs()
-        zip_path = convert_to_ir(mobilenet_path, temp_dir, logs)
+        no_fp16 = {"optimization": {"fp16_compression": False}}
+        zip_path = convert_to_ir(mobilenet_path, temp_dir, logs, OptimizationConfig(no_fp16))
 
         extract_dir = Path(temp_dir) / "ir_f32"
         with zipfile.ZipFile(zip_path) as z:
