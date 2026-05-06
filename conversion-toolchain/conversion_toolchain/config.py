@@ -26,7 +26,13 @@ class OptimizationConfig:
             "mean_values": None,  # per-channel means to subtract, e.g. [123.675, 116.28, 103.53]
             "scale_values": None,  # per-channel values to divide by, e.g. [255.0, 255.0, 255.0]
         },
-        "advanced": {"input_shape": None, "input_names": None, "output_names": None, "batch_size": 1},
+        "advanced": {
+            "input_shape": None,
+            "input_names": None,
+            "output_names": None,
+            "batch_size": 1,
+            "dynamic_batch": False,
+        },
     }
 
     def __init__(self, config_dict: dict[str, Any] | None = None):
@@ -99,6 +105,10 @@ class OptimizationConfig:
         if not isinstance(batch_size, int) or batch_size <= 0:
             raise ValueError(f"Invalid batch_size: {batch_size}. Must be a positive integer")
 
+        # dynamic_batch and batch_size > 1 are mutually exclusive
+        if self.config["advanced"].get("dynamic_batch") and batch_size > 1:
+            raise ValueError("dynamic_batch=true and batch_size > 1 are mutually exclusive")
+
         # Validate preprocessing
         input_dtype = self.get_preprocessing_input_dtype()
         if input_dtype is not None and input_dtype not in ("u8", "f16", "f32"):
@@ -154,9 +164,30 @@ class OptimizationConfig:
         """Return True if any preprocessing step is configured"""
         return any(self.config["preprocessing"][k] is not None for k in ("input_dtype", "mean_values", "scale_values"))
 
+    def with_u8_preprocessing(self, scale_values: list) -> "OptimizationConfig":
+        """Return a copy with u8 input dtype and the given scale_values set."""
+        import copy
+
+        new = copy.deepcopy(self)
+        new.config["preprocessing"]["input_dtype"] = "u8"
+        new.config["preprocessing"]["scale_values"] = scale_values
+        return new
+
+    def with_input_dtype(self, dtype: str) -> "OptimizationConfig":
+        """Return a copy with just the input_dtype set (no scale/mean changes)."""
+        import copy
+
+        new = copy.deepcopy(self)
+        new.config["preprocessing"]["input_dtype"] = dtype
+        return new
+
     def get_batch_size(self) -> int:
         """Get batch size (default 1)"""
         return self.config["advanced"]["batch_size"]
+
+    def is_dynamic_batch(self) -> bool:
+        """Return True if batch dimension should be kept dynamic in the IR"""
+        return bool(self.config["advanced"].get("dynamic_batch", False))
 
     def get_input_shape(self) -> list | None:
         """Get input shape override"""

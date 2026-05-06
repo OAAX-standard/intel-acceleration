@@ -22,13 +22,16 @@ YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
 YOLO_MODELS_B4 = ["yolo11n_b4", "yolo11s_b4"]
 YOLO_MODELS_320 = ["yolo11n_320", "yolo11s_320"]
 YOLO_MODELS_320_B4 = ["yolo11n_320_b4", "yolo11s_320_b4"]
+YOLO_MODELS_26S = ["yolo26s", "yolo26s_320", "yolo26m", "yolo26m_320"]
+YOLO_MODELS_26_BATCH = ["yolo26s_b4", "yolo26m_b2"]
 
 
 def _infer(xml: Path, model_name: str, img_value: float = 0.0) -> np.ndarray:
     info = TEST_MODELS[model_name]
     core = ov.Core()
     compiled = core.compile_model(core.read_model(str(xml)), "CPU")
-    img = np.full(info["input_shape"], img_value, dtype=np.float32)
+    input_dtype = compiled.input(0).element_type.to_dtype()
+    img = np.full(info["input_shape"], img_value, dtype=input_dtype)
     req = compiled.create_infer_request()
     req.set_input_tensor(ov.Tensor(img))
     req.infer()
@@ -339,6 +342,135 @@ def test_u8_output_is_finite(compiled_yolo_models_u8):
         pytest.skip("FP32_U8 variant not compiled")
     output = _infer_u8(xml, "yolo11n")
     assert np.all(np.isfinite(output)), "FP32_U8 output has NaN/Inf"
+
+
+# ── yolo26s tests (640x640 and 320x320) ──────────────────────────────────────
+# yolo26s has a different output format: [batch, 300, 6] instead of [batch, 84, anchors]
+
+
+def _get_26s(compiled_yolo_models_26s, model_name, variant):
+    xml = compiled_yolo_models_26s.get((model_name, variant))
+    if xml is None:
+        pytest.skip(f"{variant} not available for {model_name}")
+    return xml
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26s_ir_files_exist(compiled_yolo_models_26s, model_name, variant):
+    """yolo26s compiled .xml and .bin files are present on disk."""
+    xml = _get_26s(compiled_yolo_models_26s, model_name, variant)
+    assert xml.exists()
+    assert xml.with_suffix(".bin").exists()
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26s_ir_loads_in_openvino(compiled_yolo_models_26s, model_name, variant):
+    """yolo26s IR is readable by OpenVINO Core with one input and one output."""
+    xml = _get_26s(compiled_yolo_models_26s, model_name, variant)
+    model = ov.Core().read_model(str(xml))
+    assert len(model.inputs) == 1
+    assert len(model.outputs) == 1
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26s_output_shape(compiled_yolo_models_26s, model_name, variant):
+    """yolo26s output matches expected shape [1, 300, 6]."""
+    xml = _get_26s(compiled_yolo_models_26s, model_name, variant)
+    info = TEST_MODELS[model_name]
+    output = _infer(xml, model_name)
+    assert output.shape == tuple(info["output_shape"]), f"Expected {info['output_shape']}, got {list(output.shape)}"
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26s_output_is_finite(compiled_yolo_models_26s, model_name, variant):
+    """yolo26s output contains no NaN or Inf values."""
+    xml = _get_26s(compiled_yolo_models_26s, model_name, variant)
+    output = _infer(xml, model_name)
+    assert np.all(np.isfinite(output))
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+def test_26s_fp16_smaller_than_fp32(compiled_yolo_models_26s, model_name):
+    """yolo26s FP16 .bin is smaller than FP32 .bin."""
+    fp32 = compiled_yolo_models_26s[(model_name, "FP32")].with_suffix(".bin")
+    fp16 = compiled_yolo_models_26s[(model_name, "FP16")].with_suffix(".bin")
+    assert fp16.stat().st_size < fp32.stat().st_size
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26S)
+def test_26s_int8_smaller_than_fp32(compiled_yolo_models_26s, model_name):
+    """yolo26s INT8 .bin is smaller than FP32 .bin."""
+    fp32 = compiled_yolo_models_26s[(model_name, "FP32")].with_suffix(".bin")
+    int8 = _get_26s(compiled_yolo_models_26s, model_name, "INT8").with_suffix(".bin")
+    assert int8.stat().st_size < fp32.stat().st_size
+
+
+# ── yolo26 batch tests (yolo26s batch=4, yolo26m batch=2) ────────────────────
+
+
+def _get_26_batch(compiled_yolo_models_26_batch, model_name, variant):
+    xml = compiled_yolo_models_26_batch.get((model_name, variant))
+    if xml is None:
+        pytest.skip(f"{variant} not available for {model_name}")
+    return xml
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26_batch_ir_files_exist(compiled_yolo_models_26_batch, model_name, variant):
+    """yolo26 batched compiled .xml and .bin files are present on disk."""
+    xml = _get_26_batch(compiled_yolo_models_26_batch, model_name, variant)
+    assert xml.exists()
+    assert xml.with_suffix(".bin").exists()
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26_batch_ir_loads_in_openvino(compiled_yolo_models_26_batch, model_name, variant):
+    """yolo26 batched IR is readable by OpenVINO Core with one input and one output."""
+    xml = _get_26_batch(compiled_yolo_models_26_batch, model_name, variant)
+    model = ov.Core().read_model(str(xml))
+    assert len(model.inputs) == 1
+    assert len(model.outputs) == 1
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26_batch_output_shape(compiled_yolo_models_26_batch, model_name, variant):
+    """yolo26 batched output matches expected shape [batch, 300, 6]."""
+    xml = _get_26_batch(compiled_yolo_models_26_batch, model_name, variant)
+    info = TEST_MODELS[model_name]
+    output = _infer(xml, model_name)
+    assert output.shape == tuple(info["output_shape"]), f"Expected {info['output_shape']}, got {list(output.shape)}"
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+@pytest.mark.parametrize("variant", ["FP32", "FP16", "INT8"])
+def test_26_batch_output_is_finite(compiled_yolo_models_26_batch, model_name, variant):
+    """yolo26 batched output contains no NaN or Inf values."""
+    xml = _get_26_batch(compiled_yolo_models_26_batch, model_name, variant)
+    output = _infer(xml, model_name)
+    assert np.all(np.isfinite(output))
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+def test_26_batch_fp16_smaller_than_fp32(compiled_yolo_models_26_batch, model_name):
+    """yolo26 batched FP16 .bin is smaller than FP32 .bin."""
+    fp32 = compiled_yolo_models_26_batch[(model_name, "FP32")].with_suffix(".bin")
+    fp16 = compiled_yolo_models_26_batch[(model_name, "FP16")].with_suffix(".bin")
+    assert fp16.stat().st_size < fp32.stat().st_size
+
+
+@pytest.mark.parametrize("model_name", YOLO_MODELS_26_BATCH)
+def test_26_batch_int8_smaller_than_fp32(compiled_yolo_models_26_batch, model_name):
+    """yolo26 batched INT8 .bin is smaller than FP32 .bin."""
+    fp32 = compiled_yolo_models_26_batch[(model_name, "FP32")].with_suffix(".bin")
+    int8 = _get_26_batch(compiled_yolo_models_26_batch, model_name, "INT8").with_suffix(".bin")
+    assert int8.stat().st_size < fp32.stat().st_size
 
 
 def test_u8_matches_f32_baseline(compiled_yolo_models, compiled_yolo_models_u8):

@@ -67,6 +67,20 @@ def main() -> None:
         check=True,
     )
 
+    header("Step 7: YOLO26s 640x640 and 320x320 integration tests (FP32 / FP16 / INT8)")
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "26s"],
+        cwd=ROOT,
+        check=True,
+    )
+
+    header("Step 8: YOLO26 batched integration tests (yolo26s batch=4, yolo26m batch=2)")
+    subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_yolo_integration.py", "-v", "--tb=short", "-k", "26_batch"],
+        cwd=ROOT,
+        check=True,
+    )
+
     print("\nStage 1 complete — compiled models saved to tests/compiled_models/")
 
 

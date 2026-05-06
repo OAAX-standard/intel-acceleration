@@ -92,6 +92,18 @@ Example — bake u8 input + ÷255 normalisation into the IR:
 ```
 When quantization is also enabled, calibration images are fed in the configured format so NNCF statistics stay consistent.
 
+**config.json `advanced` keys** (all optional):
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `batch_size` | `1` | Fix the batch dimension to a specific integer at conversion time. Mutually exclusive with `dynamic_batch`. |
+| `dynamic_batch` | `false` | Set batch dimension to `-1` (dynamic) in the IR so any batch size is accepted at inference. Mutually exclusive with `batch_size > 1`. Combined with quantization: NNCF still calibrates with batch=1. |
+
+Example — keep batch dynamic:
+```json
+{ "advanced": { "dynamic_batch": true } }
+```
+
 **Exit codes:** 0=success, 1=file not found, 2=invalid input, 3=conversion failed, 4=I/O error, 255=unexpected.
 
 ### Runtime Library (`runtime-library/`)
@@ -117,14 +129,19 @@ When `device_type="GPU"` and multiple GPU devices are present, the runtime autom
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs), `"GPU.0"`, `"NPU"` |
-| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"` |
+| `device_type` | `"CPU"` | `"CPU"`, `"GPU"` (auto-MULTI if multiple GPUs), `"GPU.0"`, `"NPU"`, `"AUTO"` (starts on CPU, migrates to best accelerator), `"AUTO:GPU,CPU"` (priority order) |
+| `perf_hint` | `"latency"` | `"latency"` / `"throughput"` / `"cumulative_throughput"`. Use `cumulative_throughput` with MULTI. Do **not** mix with `inference_num_threads`. |
 | `log_level` | `"2"` (info) | spdlog level int as string |
 | `log_file` | `"runtime.log"` | Log file path |
 | `cache_dir` | `"."` (CWD) | OpenVINO compiled-model cache. Set to `""` to disable. |
 | `log_stdout` | `"0"` | Set to `"1"` to also print logs to stdout (default: file only). |
 | `max_queue_size` | `"100"` | Max pending items in the input and output queues. New inputs are rejected with a warning when either queue reaches this limit. Set to `"0"` to disable. |
-| `input_dtype` | `"f32"` | Input tensor dtype expected from the caller: `"f32"`, `"u8"`, `"f16"`. A PrePostProcessor conversion to the model's native type is inserted at compile time. |
+| `num_streams` | `"0"` (auto) | Number of parallel inference streams. `"0"` lets OpenVINO decide. Recommended `"4"` for discrete Intel GPU with `throughput` hint. No effect with `latency` hint. |
+| `auto_batch_size` | `"0"` (disabled) | Wraps the device in OpenVINO's `BATCH` pseudo-device to transparently aggregate concurrent requests into hardware batches. Set to the desired batch size (e.g. `"8"`). GPU only — ignored with a warning on CPU. |
+
+**Input dtype contract:** the runtime reads the IR's input element type from the compiled model and validates every enqueue call against it. The toolchain auto-bakes the correct type — FP32 models expect `f32`, FP16 models expect `f16`, INT8 models expect `u8`. Mismatches are rejected immediately with `RUNTIME_STATUS_INVALID_ARGUMENT`.
+
+**Note:** do not set `ov::inference_num_threads` or `INFERENCE_NUM_THREADS` alongside a `perf_hint` — the hint owns thread scheduling internally. `num_streams` is the exception and can be combined with `throughput` hint for GPU tuning.
 
 **Output ownership:** caller owns `Tensors*` returned by `runtime_retrieve_output` and must free
 `tensors[i].name`, `tensors[i].shape`, `tensors[i].data`, `tensors`, and the `Tensors` struct itself.

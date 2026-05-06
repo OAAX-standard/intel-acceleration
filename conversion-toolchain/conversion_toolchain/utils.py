@@ -305,11 +305,44 @@ def convert_to_ir(
 
         logs.add_message("Successfully converted to OpenVINO IR format")
 
+        # Make batch dimension dynamic if requested
+        if config.is_dynamic_batch():
+            shapes = {}
+            for inp in model.inputs:
+                ps = inp.get_partial_shape()
+                shapes[inp.any_name] = ov.PartialShape([ov.Dimension(-1)] + [ps[i] for i in range(1, len(ps))])
+            model.reshape(shapes)
+            logs.add_message("Batch dimension set to dynamic (-1)")
+
+        # Auto-apply input dtype when none is explicitly configured, so the
+        # compiled IR's input boundary matches the model's precision tier and
+        # callers always send the right dtype without guessing.
+        if config.get_preprocessing_input_dtype() is None:
+            if config.is_quantization_enabled():
+                # INT8: bake u8 input + ÷255 so callers feed raw pixels.
+                # NNCF then calibrates against the same distribution.
+                input_ps = model.input(0).get_partial_shape()
+                num_channels = input_ps[1].get_length() if len(input_ps) >= 2 and input_ps[1].is_static else 3
+                config = config.with_u8_preprocessing([255.0] * num_channels)
+                logs.add_message(
+                    "Auto-applying u8 input preprocessing for INT8 model",
+                    {"scale_values": [255.0] * num_channels},
+                )
+            elif config.get_fp16_compression():
+                # FP16: bake f16 input so callers feed half-precision tensors.
+                config = config.with_input_dtype("f16")
+                logs.add_message("Auto-applying f16 input dtype for FP16 model")
+
         # Bake preprocessing (dtype conversion, mean, scale) into the graph before quantization
         # so NNCF calibrates against the same input format used at inference time.
         model = apply_preprocessing(model, config, logs)
 
         # Apply quantization if enabled
+        if config.is_quantization_enabled() and config.is_dynamic_batch():
+            logs.add_message(
+                "Warning: dynamic_batch=true with quantization — NNCF requires static shapes; "
+                "quantization will proceed with batch=1 calibration data"
+            )
         if config.is_quantization_enabled():
             if not is_nncf_available():
                 logs.add_message("Warning: NNCF not available, skipping quantization")
@@ -345,8 +378,13 @@ def convert_to_ir(
             xml_path = temp_path / f"{model_name}.xml"
             bin_path = temp_path / f"{model_name}.bin"
 
-            # Save the model in IR format with FP16 compression setting
+            # FP16 compression is meaningless for INT8-quantized models — their
+            # weights are already INT8, and compressing remaining constants to
+            # FP16 would interfere with the quantized representation.
             compress_fp16 = config.get_fp16_compression()
+            if config.is_quantization_enabled() and compress_fp16:
+                compress_fp16 = False
+                logs.add_message("FP16 compression disabled for INT8 model")
 
             logs.add_message(
                 "Saving model to IR format",

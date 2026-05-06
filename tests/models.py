@@ -27,6 +27,12 @@ _YOLO_EXPORTS = {
     "yolo11s_320": ("yolo11s.pt", 1, 320),
     "yolo11n_320_b4": ("yolo11n.pt", 4, 320),
     "yolo11s_320_b4": ("yolo11s.pt", 4, 320),
+    "yolo26s": ("yolo26s.pt", 1, 640),
+    "yolo26s_320": ("yolo26s.pt", 1, 320),
+    "yolo26m": ("yolo26m.pt", 1, 640),
+    "yolo26m_320": ("yolo26m.pt", 1, 320),
+    "yolo26s_b4": ("yolo26s.pt", 4, 640),
+    "yolo26m_b2": ("yolo26m.pt", 2, 640),
 }
 
 TEST_MODELS = {
@@ -120,6 +126,49 @@ TEST_MODELS = {
         "input_name": "images",
         "output_channels": 84,
         "output_anchors": 2100,
+    },
+    # yolo26 models use a detection-head output [batch, 300, 6] (fixed regardless of input size)
+    "yolo26s_b4": {
+        "filename": "yolo26s_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [4, 300, 6],
+    },
+    "yolo26m_b2": {
+        "filename": "yolo26m_b2.onnx",
+        "task": "object_detection",
+        "input_shape": [2, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [2, 300, 6],
+    },
+    "yolo26s": {
+        "filename": "yolo26s.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26s_320": {
+        "filename": "yolo26s_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26m": {
+        "filename": "yolo26m.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26m_320": {
+        "filename": "yolo26m_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
     },
 }
 

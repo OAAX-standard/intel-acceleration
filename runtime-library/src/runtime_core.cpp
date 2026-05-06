@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -240,6 +241,7 @@ struct ModelState {
   std::atomic<bool> stop{false};
   std::vector<std::string> input_names;
   std::vector<std::string> output_names;
+  std::unordered_map<std::string, ov::element::Type> input_type_by_name;
   std::string temp_dir;
   std::string effective_device;
 };
@@ -277,7 +279,9 @@ static std::string g_perf_hint = "latency";
 static std::string g_cache_dir = ".";
 static int g_num_requests = 0;  // 0 = use ov::optimal_number_of_infer_requests
 static int g_max_queue_size = 100;
-static std::string g_input_dtype = "f32";
+static int g_num_streams = 0;  // 0 = let OpenVINO decide; >0 sets NUM_STREAMS
+static int g_auto_batch_size =
+    0;  // 0 = disabled; >0 wraps device in BATCH:<dev>(N)
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -533,7 +537,8 @@ static std::string resolve_device(const std::string& requested) {
   return multi;
 }
 
-static ov::AnyMap build_perf_config(const std::string& hint) {
+static ov::AnyMap build_perf_config(const std::string& hint,
+                                    int num_streams = 0) {
   ov::AnyMap cfg;
   if (hint == "throughput")
     cfg[ov::hint::performance_mode.name()] =
@@ -543,6 +548,8 @@ static ov::AnyMap build_perf_config(const std::string& hint) {
         ov::hint::PerformanceMode::CUMULATIVE_THROUGHPUT;
   else
     cfg[ov::hint::performance_mode.name()] = ov::hint::PerformanceMode::LATENCY;
+  if (num_streams > 0)
+    cfg[ov::num_streams.name()] = ov::streams::Num(num_streams);
   return cfg;
 }
 
@@ -615,6 +622,19 @@ RuntimeStatus runtime_init(Config config) {
     g_perf_hint = "latency";
 
   try {
+    g_num_streams = std::stoi(config_get(config, "num_streams", "0"));
+    if (g_num_streams < 0) g_num_streams = 0;
+  } catch (...) {
+    g_num_streams = 0;
+  }
+  try {
+    g_auto_batch_size = std::stoi(config_get(config, "auto_batch_size", "0"));
+    if (g_auto_batch_size < 0) g_auto_batch_size = 0;
+  } catch (...) {
+    g_auto_batch_size = 0;
+  }
+
+  try {
     g_log_level = std::stoi(log_level_str);
   } catch (...) {
     g_log_level = spdlog::level::info;
@@ -652,13 +672,31 @@ RuntimeStatus runtime_init(Config config) {
       g_logger->info("  cache_dir: (disabled)");
     }
 
-    g_input_dtype = config_get(config, "input_dtype", "f32");
-    g_logger->info("  input_dtype: {}", g_input_dtype);
+    g_logger->info("  num_streams:     {}",
+                   g_num_streams > 0 ? std::to_string(g_num_streams) : "auto");
+    g_logger->info(
+        "  auto_batch_size: {}",
+        g_auto_batch_size > 0 ? std::to_string(g_auto_batch_size) : "disabled");
+
+    // Warn if the caller mixes a performance hint with low-level thread
+    // controls. num_streams is intentionally excluded — it is a valid tuning
+    // knob alongside throughput hint (especially on discrete GPU).
+    for (const char* thread_key :
+         {"inference_num_threads", "num_threads", "INFERENCE_NUM_THREADS"}) {
+      if (config_get(config, thread_key, "").empty()) continue;
+      g_logger->warn(
+          "Config key '{}' is set alongside perf_hint='{}'. Do not mix "
+          "performance hints with low-level thread controls — the hint manages "
+          "threading internally and the manual value will be ignored or "
+          "produce "
+          "suboptimal results.",
+          thread_key, g_perf_hint);
+    }
 
     config_warn_unknown(
-        config,
-        {"log_level", "log_file", "log_stdout", "device_type", "perf_hint",
-         "cache_dir", "num_requests", "max_queue_size", "input_dtype"});
+        config, {"log_level", "log_file", "log_stdout", "device_type",
+                 "perf_hint", "cache_dir", "num_requests", "max_queue_size",
+                 "num_streams", "auto_batch_size"});
     log_available_devices();
     // Initialize the output semaphore here so it is always ready before any
     // thread can call runtime_retrieve_output (which only checks
@@ -723,28 +761,68 @@ RuntimeStatus runtime_load_models(int num_models,
 
       auto model = g_core->read_model(xml_path);
 
-      // Optional input dtype preprocessing (e.g. "u8" for INT8 models)
-      if (g_input_dtype != "f32") {
-        ov::element::Type caller_type = ov::element::dynamic;
-        if (g_input_dtype == "u8")
-          caller_type = ov::element::u8;
-        else if (g_input_dtype == "f16")
-          caller_type = ov::element::f16;
-        if (!caller_type.is_dynamic()) {
-          ov::preprocess::PrePostProcessor ppp(model);
-          for (size_t i = 0; i < model->inputs().size(); ++i) {
-            auto model_type = model->input(i).get_element_type();
-            ppp.input(i).tensor().set_element_type(caller_type);
-            ppp.input(i).preprocess().convert_element_type(model_type);
-          }
-          model = ppp.build();
-          g_logger->info("[model {}] Input dtype: {} (converted to model type)",
-                         m_idx, g_input_dtype);
-        }
+      // Log the expected input dtype as declared in the IR. The toolchain bakes
+      // the correct input type into the model (f32 / f16 / u8), so no runtime
+      // PPP conversion is needed — callers must match the IR's input type.
+      for (size_t i = 0; i < model->inputs().size(); ++i) {
+        auto type = model->input(i).get_element_type();
+        auto name = model->input(i).get_any_name();
+        g_logger->info("[model {}] Input '{}' expects: {}", m_idx, name,
+                       type.to_string());
       }
 
       std::string eff_device = resolve_device(device);
-      auto perf_cfg = build_perf_config(hint);
+
+      // AUTO device: OpenVINO starts inference on CPU immediately and
+      // transparently migrates to the best available accelerator in the
+      // background once it finishes loading.
+      if (eff_device.rfind("AUTO", 0) == 0)
+        g_logger->info(
+            "[model {}] AUTO device selected — inference starts on CPU and "
+            "migrates to accelerator in background when ready.",
+            m_idx);
+
+      // For MULTI-device execution the recommended hint is
+      // cumulative_throughput, which distributes requests across all devices
+      // simultaneously. Any other hint applies per-device and leaves aggregate
+      // throughput on the table.
+      if (eff_device.rfind("MULTI:", 0) == 0 &&
+          hint != "cumulative_throughput") {
+        g_logger->warn(
+            "[model {}] Device is '{}' but perf_hint is '{}'. Use "
+            "perf_hint=cumulative_throughput with MULTI to maximise aggregate "
+            "throughput across all devices.",
+            m_idx, eff_device, hint);
+      }
+
+      // BATCH pseudo-device: wraps the underlying device and transparently
+      // aggregates concurrent single requests into hardware batches.
+      // Most effective on GPU with batch sizes 4–64; not beneficial on CPU.
+      if (g_auto_batch_size > 0) {
+        if (eff_device == "CPU") {
+          g_logger->warn(
+              "[model {}] auto_batch_size={} ignored — BATCH device is not "
+              "beneficial on CPU.",
+              m_idx, g_auto_batch_size);
+        } else {
+          eff_device = "BATCH:" + eff_device + "(" +
+                       std::to_string(g_auto_batch_size) + ")";
+          g_logger->info("[model {}] BATCH device: {}", m_idx, eff_device);
+        }
+      }
+
+      // num_streams: refines GPU parallelism alongside throughput hint.
+      // Recommended value for discrete Intel GPU: 4.
+      int effective_streams = g_num_streams;
+      if (effective_streams > 0 && hint == "latency") {
+        g_logger->warn(
+            "[model {}] num_streams={} has no effect with perf_hint=latency "
+            "(latency hint uses a single stream).",
+            m_idx, effective_streams);
+        effective_streams = 0;
+      }
+
+      auto perf_cfg = build_perf_config(hint, effective_streams);
 
       g_logger->info("[model {}] Compiling for '{}' (hint={})...", m_idx,
                      eff_device, hint);
@@ -775,7 +853,15 @@ RuntimeStatus runtime_load_models(int num_models,
       }
 
       int n_req = compiled.get_property(ov::optimal_number_of_infer_requests);
-      g_logger->info("[model {}] Optimal infer requests: {}", m_idx, n_req);
+      try {
+        int actual_streams = (int)compiled.get_property(ov::num_streams);
+        g_logger->info("[model {}] Streams: {} ({}), infer requests: {}", m_idx,
+                       actual_streams,
+                       effective_streams > 0 ? "user-set" : "auto", n_req);
+      } catch (...) {
+        // not all devices expose num_streams (e.g. NPU)
+        g_logger->info("[model {}] Optimal infer requests: {}", m_idx, n_req);
+      }
       int forced_nreq = 0;
       try {
         forced_nreq = std::stoi(config_get(
@@ -795,8 +881,10 @@ RuntimeStatus runtime_load_models(int num_models,
       ms->effective_device = eff_device;
       ms->temp_dir = temp_dir;
 
-      for (const auto& inp : ms->compiled_model.inputs())
+      for (const auto& inp : ms->compiled_model.inputs()) {
         ms->input_names.push_back(inp.get_any_name());
+        ms->input_type_by_name[inp.get_any_name()] = inp.get_element_type();
+      }
       for (const auto& out : ms->compiled_model.outputs())
         ms->output_names.push_back(out.get_any_name());
 
@@ -864,6 +952,28 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
 
   ModelState& m = *g_models[model_id];
   auto t0 = std::chrono::steady_clock::now();
+
+  // Validate input dtypes against the compiled model's expected types.
+  for (int i = 0; i < input_tensors->num_tensors; ++i) {
+    const TensorDescriptor& td = input_tensors->tensors[i];
+    if (!td.name) continue;
+    auto it = m.input_type_by_name.find(std::string(td.name));
+    if (it == m.input_type_by_name.end()) continue;
+    try {
+      ov::element::Type actual = map_to_ov_type(td.data_type);
+      if (actual != it->second) {
+        set_error("runtime_enqueue_input: dtype mismatch for input '" +
+                  std::string(td.name) + "': model expects " +
+                  it->second.to_string() + " but caller sent " +
+                  actual.to_string());
+        return RUNTIME_STATUS_INVALID_ARGUMENT;
+      }
+    } catch (...) {
+      set_error("runtime_enqueue_input: unsupported tensor dtype for '" +
+                std::string(td.name) + "'");
+      return RUNTIME_STATUS_INVALID_ARGUMENT;
+    }
+  }
 
   if (g_max_queue_size > 0) {
     size_t in_pending = m.input_queue.size_approx();
@@ -1148,13 +1258,92 @@ const char* runtime_get_info(void) {
     bv = "unknown";
   }
 
+  // Available hardware devices visible to OpenVINO
+  std::string devices_json = "[";
+  try {
+    auto devs = g_core->get_available_devices();
+    for (size_t i = 0; i < devs.size(); ++i) {
+      if (i) devices_json += ",";
+      devices_json += "\"" + devs[i] + "\"";
+    }
+  } catch (...) {
+  }
+  devices_json += "]";
+
+  // Serialize a partial shape as a JSON array; dynamic dims become -1
+  auto shape_json = [](const ov::PartialShape& ps) {
+    std::string out = "[";
+    for (size_t d = 0; d < ps.size(); ++d) {
+      if (d) out += ",";
+      out += ps[d].is_static() ? std::to_string(ps[d].get_length()) : "-1";
+    }
+    return out + "]";
+  };
+
+  // Per-model details
+  std::string models_json = "[";
+  for (size_t i = 0; i < g_models.size(); ++i) {
+    const auto* ms = g_models[i];
+    if (i) models_json += ",";
+    models_json += "{";
+    models_json += "\"id\":" + std::to_string(ms->id) + ",";
+    models_json += "\"effective_device\":\"" + ms->effective_device + "\",";
+    models_json +=
+        "\"num_infer_requests\":" + std::to_string(ms->infer_requests.size()) +
+        ",";
+    models_json += "\"input_queue_depth\":" +
+                   std::to_string(ms->input_queue.size_approx()) + ",";
+
+    // Inputs: name, dtype, shape
+    std::string inputs_json = "[";
+    for (size_t j = 0; j < ms->input_names.size(); ++j) {
+      if (j) inputs_json += ",";
+      const std::string& name = ms->input_names[j];
+      auto dtype_it = ms->input_type_by_name.find(name);
+      std::string dtype = dtype_it != ms->input_type_by_name.end()
+                              ? dtype_it->second.get_type_name()
+                              : "unknown";
+      std::string shape = "[]";
+      try {
+        shape = shape_json(ms->compiled_model.input(j).get_partial_shape());
+      } catch (...) {
+      }
+      inputs_json += "{\"name\":\"" + name + "\",\"dtype\":\"" + dtype +
+                     "\",\"shape\":" + shape + "}";
+    }
+    inputs_json += "]";
+    models_json += "\"inputs\":" + inputs_json + ",";
+
+    // Outputs: name and shape only (dtype less relevant for callers)
+    std::string outputs_json = "[";
+    for (size_t j = 0; j < ms->output_names.size(); ++j) {
+      if (j) outputs_json += ",";
+      std::string shape = "[]";
+      try {
+        shape = shape_json(ms->compiled_model.output(j).get_partial_shape());
+      } catch (...) {
+      }
+      outputs_json +=
+          "{\"name\":\"" + ms->output_names[j] + "\",\"shape\":" + shape + "}";
+    }
+    outputs_json += "]";
+    models_json += "\"outputs\":" + outputs_json;
+
+    models_json += "}";
+  }
+  models_json += "]";
+
   g_info_json = "{";
   g_info_json += "\"loaded_models\":" + std::to_string(g_models.size()) + ",";
   g_info_json += "\"requests_in_flight\":" + std::to_string(in_flight) + ",";
-  g_info_json += "\"backend_version\":\"" + bv + "\"";
-  if (!g_models.empty())
-    g_info_json +=
-        ",\"active_device\":\"" + g_models[0]->effective_device + "\"";
+  g_info_json +=
+      "\"output_queue_depth\":" + std::to_string(g_output_queue.size_approx()) +
+      ",";
+  g_info_json += "\"backend_version\":\"" + bv + "\",";
+  g_info_json += "\"perf_hint\":\"" + g_perf_hint + "\",";
+  g_info_json += "\"max_queue_size\":" + std::to_string(g_max_queue_size) + ",";
+  g_info_json += "\"available_devices\":" + devices_json + ",";
+  g_info_json += "\"models\":" + models_json;
   g_info_json += "}";
 
   return g_info_json.c_str();
