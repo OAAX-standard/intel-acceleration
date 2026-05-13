@@ -282,6 +282,7 @@ static int g_max_queue_size = 100;
 static int g_num_streams = 0;  // 0 = let OpenVINO decide; >0 sets NUM_STREAMS
 static int g_auto_batch_size =
     0;  // 0 = disabled; >0 wraps device in BATCH:<dev>(N)
+static bool g_npu_turbo = false;  // inject NPU_TURBO=YES into compile config
 
 // ─── Config helpers
 // ───────────────────────────────────────────────────────────
@@ -633,6 +634,7 @@ RuntimeStatus runtime_init(Config config) {
   } catch (...) {
     g_auto_batch_size = 0;
   }
+  g_npu_turbo = config_get(config, "npu_turbo", "0") == "1";
 
   try {
     g_log_level = std::stoi(log_level_str);
@@ -677,6 +679,8 @@ RuntimeStatus runtime_init(Config config) {
     g_logger->info(
         "  auto_batch_size: {}",
         g_auto_batch_size > 0 ? std::to_string(g_auto_batch_size) : "disabled");
+    g_logger->info("  npu_turbo:       {}",
+                   g_npu_turbo ? "enabled" : "disabled");
 
     // Warn if the caller mixes a performance hint with low-level thread
     // controls. num_streams is intentionally excluded — it is a valid tuning
@@ -696,7 +700,7 @@ RuntimeStatus runtime_init(Config config) {
     config_warn_unknown(
         config, {"log_level", "log_file", "log_stdout", "device_type",
                  "perf_hint", "cache_dir", "num_requests", "max_queue_size",
-                 "num_streams", "auto_batch_size"});
+                 "num_streams", "auto_batch_size", "npu_turbo"});
     log_available_devices();
     // Initialize the output semaphore here so it is always ready before any
     // thread can call runtime_retrieve_output (which only checks
@@ -823,6 +827,21 @@ RuntimeStatus runtime_load_models(int num_models,
       }
 
       auto perf_cfg = build_perf_config(hint, effective_streams);
+
+      // NPU_TURBO raises the NPU clock to its maximum sustained frequency.
+      // Driver-permitting; silently ignored on non-NPU devices or older
+      // drivers.
+      if (g_npu_turbo) {
+        bool is_npu = eff_device == "NPU" || eff_device.rfind("NPU.", 0) == 0;
+        if (is_npu) {
+          perf_cfg["NPU_TURBO"] = std::string("YES");
+          g_logger->info("[model {}] NPU_TURBO=YES injected", m_idx);
+        } else {
+          g_logger->warn(
+              "[model {}] npu_turbo=1 ignored — device is '{}', not NPU", m_idx,
+              eff_device);
+        }
+      }
 
       g_logger->info("[model {}] Compiling for '{}' (hint={})...", m_idx,
                      eff_device, hint);

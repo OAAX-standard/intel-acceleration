@@ -363,6 +363,7 @@ def convert_to_ir(
                     subset_size=config.get_quantization_subset_size(),
                     logs=logs,
                     input_dtype=config.get_preprocessing_input_dtype() or "f32",
+                    target_device=config.get_quantization_target_device(),
                 )
 
         # Generate output paths

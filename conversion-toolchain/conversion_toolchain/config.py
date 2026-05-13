@@ -19,6 +19,7 @@ class OptimizationConfig:
                 "calibration_data": "calibration/",
                 "preset": "mixed",
                 "subset_size": 300,
+                "target_device": "any",
             },
         },
         "preprocessing": {
@@ -95,6 +96,13 @@ class OptimizationConfig:
         if preset not in ["performance", "mixed", "accuracy"]:
             raise ValueError(f"Invalid quantization preset: {preset}. Must be 'performance', 'mixed', or 'accuracy'")
 
+        # Validate quantization target device
+        target_device = self.get_quantization_target_device()
+        if target_device not in ["any", "cpu", "gpu", "npu"]:
+            raise ValueError(
+                f"Invalid quantization target_device: '{target_device}'. Must be 'any', 'cpu', 'gpu', or 'npu'"
+            )
+
         # Validate subset size
         subset_size = self.get_quantization_subset_size()
         if not isinstance(subset_size, int) or subset_size <= 0:
@@ -147,6 +155,10 @@ class OptimizationConfig:
     def get_quantization_subset_size(self) -> int:
         """Get calibration subset size"""
         return self.config["optimization"]["quantization"]["subset_size"]
+
+    def get_quantization_target_device(self) -> str:
+        """Get quantization target device ('any', 'cpu', 'gpu', or 'npu')"""
+        return self.config["optimization"]["quantization"].get("target_device", "any")
 
     def get_preprocessing_input_dtype(self) -> str | None:
         """Get preprocessing input dtype override ('u8', 'f16', 'f32', or None)"""

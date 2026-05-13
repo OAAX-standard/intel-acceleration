@@ -138,6 +138,7 @@ def quantize_model(
     subset_size: int = 300,
     logs=None,
     input_dtype: str = "f32",
+    target_device: str = "any",
 ) -> ov.Model:
     """
     Quantize OpenVINO model to INT8 using NNCF
@@ -148,6 +149,10 @@ def quantize_model(
         preset: NNCF quantization preset ('performance', 'mixed', or 'accuracy')
         subset_size: Number of calibration samples to use
         logs: Logger instance for tracking progress
+        input_dtype: Element type expected by the model boundary
+        target_device: Deployment target ('any', 'cpu', 'gpu', 'npu'). When 'npu',
+            preset is forced to 'performance' and attention/DFL subgraphs are kept
+            in FP16 via IgnoredScope to avoid NPU requantization overhead.
 
     Returns:
         Quantized OpenVINO model
@@ -165,7 +170,12 @@ def quantize_model(
     if logs:
         logs.add_message(
             "Starting INT8 quantization",
-            {"Preset": preset, "Calibration directory": calibration_dir, "Subset size": subset_size},
+            {
+                "Preset": preset,
+                "Target device": target_device,
+                "Calibration directory": calibration_dir,
+                "Subset size": subset_size,
+            },
         )
 
     # Get model input shape
@@ -191,13 +201,41 @@ def quantize_model(
     # Create calibration dataset
     calibration_dataset = nncf.Dataset(data_loader.get_data_generator(subset_size))
 
-    # Map preset to NNCF preset
     preset_mapping = {
         "performance": nncf.QuantizationPreset.PERFORMANCE,
         "mixed": nncf.QuantizationPreset.MIXED,
     }
+    device_mapping = {
+        "npu": nncf.TargetDevice.NPU,
+        "cpu": nncf.TargetDevice.CPU,
+        "gpu": nncf.TargetDevice.GPU,
+        "any": nncf.TargetDevice.ANY,
+    }
+
+    nncf_device = device_mapping.get(target_device.lower(), nncf.TargetDevice.ANY)
+
+    # NPU requires symmetric weights (PERFORMANCE preset) and cannot fuse
+    # FakeQuantize boundaries around attention/DFL ops — keep those in FP16.
+    is_npu = target_device.lower() == "npu"
+    if is_npu and preset != "performance":
+        if logs:
+            logs.add_message(
+                f"NPU target: overriding preset '{preset}' → 'performance' "
+                "(symmetric weights required for VPUX full fusion)"
+            )
+        preset = "performance"
 
     nncf_preset = preset_mapping.get(preset, nncf.QuantizationPreset.MIXED)
+
+    ignored_scope = (
+        nncf.IgnoredScope(
+            patterns=[r".*/attn/.*", r".*/dfl/.*"],
+            types=["MatMul"],
+            validate=False,
+        )
+        if is_npu
+        else None
+    )
 
     if logs:
         logs.add_message("Running NNCF quantization (this may take several minutes)")
@@ -208,7 +246,9 @@ def quantize_model(
             model,
             calibration_dataset,
             preset=nncf_preset,
-            # Additional settings for better quality
+            target_device=nncf_device,
+            ignored_scope=ignored_scope,
+            fast_bias_correction=True,
             model_type=nncf.ModelType.TRANSFORMER if "bert" in str(model.get_friendly_name()).lower() else None,
         )
 

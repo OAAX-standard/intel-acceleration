@@ -70,7 +70,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-bench", action="store_true", help="Skip benchmark_app section")
     p.add_argument("--models", default="", help="Comma-separated model names to run (default: all)")
     p.add_argument(
-        "--precisions", default="", help="Comma-separated precisions to run: FP32,FP16,INT8,FP32_U8 (default: all)"
+        "--precisions",
+        default="",
+        help="Comma-separated precisions to run: FP32,FP16,INT8,INT8_NPU,FP32_U8 (default: all)",
     )
     return p.parse_args()
 
@@ -146,10 +148,10 @@ def get_compiled_models(
     model_filter: set[str] | None = None, precision_filter: set[str] | None = None
 ) -> list[tuple[Path, str, str]]:
     allowed_models = model_filter or YOLO_MODELS
-    allowed_precisions = precision_filter or {"FP32", "FP16", "INT8", "FP32_U8"}
+    allowed_precisions = precision_filter or {"FP32", "FP16", "INT8", "INT8_NPU", "FP32_U8"}
     return [
         (zip_path, zip_path.stem, zip_path.parent.name)
-        for variant in ("FP32", "FP16", "INT8", "FP32_U8")
+        for variant in ("FP32", "FP16", "INT8", "INT8_NPU", "FP32_U8")
         if variant in allowed_precisions
         for zip_path in sorted(COMPILED_DIR.glob(f"*/{variant}/*.zip"))
         if zip_path.stem in allowed_models
@@ -384,8 +386,8 @@ def main() -> None:
                 # yolo26 models have a non-standard [batch,300,6] output; skip the shape check
                 no_validate = model.startswith("yolo26")
                 # Match the input dtype baked into the IR by the toolchain:
-                # INT8 → u8, FP16 → f16, FP32_U8 → u8 (u8 boundary with ÷255 baked in), FP32 → f32
-                if variant in ("INT8", "FP32_U8"):
+                # INT8/INT8_NPU → u8, FP16 → f16, FP32_U8 → u8 (u8 with ÷255 baked in), FP32 → f32
+                if variant in ("INT8", "INT8_NPU", "FP32_U8"):
                     input_dtype = "u8"
                 elif variant == "FP16":
                     input_dtype = "f16"

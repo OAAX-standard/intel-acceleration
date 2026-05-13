@@ -1,7 +1,7 @@
 """
 Shared session fixtures for the OAAX intel-acceleration test suite.
 
-compiled_yolo_models converts all YOLO variants (FP32/FP16/INT8) once per
+compiled_yolo_models converts all YOLO variants (FP32/FP16/INT8/INT8_NPU) once per
 session via the Docker toolchain image, caching to tests/compiled_models/.
 Stage 1 populates this cache; Stage 2 reads from it without re-converting.
 """
@@ -28,10 +28,18 @@ YOLO_MODELS_26_BATCH = ["yolo26s_b4", "yolo26m_b2"]
 _CONFIGS = {
     "FP32": {"optimization": {"fp16_compression": False}},
     "FP16": {"optimization": {"fp16_compression": True}},
+    # INT8 for CPU/GPU: performance preset, no device-specific tuning.
     "INT8": {
         "optimization": {
             "fp16_compression": False,
-            "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
+            "quantization": {"enabled": True, "preset": "performance", "subset_size": 128, "target_device": "any"},
+        }
+    },
+    # INT8 for NPU: performance preset (symmetric weights) + attention/DFL kept in FP16.
+    "INT8_NPU": {
+        "optimization": {
+            "fp16_compression": False,
+            "quantization": {"enabled": True, "preset": "performance", "subset_size": 128, "target_device": "npu"},
         }
     },
     # FP32 model with ÷255 normalisation and u8 input boundary baked into the IR.
@@ -47,7 +55,13 @@ _CONFIGS_B4 = {
     "INT8": {
         "optimization": {
             "fp16_compression": False,
-            "quantization": {"enabled": True, "preset": "mixed", "subset_size": 128},
+            "quantization": {"enabled": True, "preset": "performance", "subset_size": 128, "target_device": "any"},
+        }
+    },
+    "INT8_NPU": {
+        "optimization": {
+            "fp16_compression": False,
+            "quantization": {"enabled": True, "preset": "performance", "subset_size": 128, "target_device": "npu"},
         }
     },
 }
@@ -142,7 +156,7 @@ def calibration_dir() -> Path:
 @pytest.fixture(scope="session")
 def compiled_yolo_models(calibration_dir: Path) -> dict:
     """
-    Convert all YOLO models (FP32/FP16/INT8) once via the Docker toolchain image,
+    Convert all YOLO models (FP32/FP16/INT8/INT8_NPU) once via the Docker toolchain image,
     caching results to tests/compiled_models/.
 
     Returns {(model_name, variant): Path-to-xml}.
@@ -181,7 +195,7 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 
@@ -191,7 +205,7 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
 @pytest.fixture(scope="session")
 def compiled_yolo_models_320(calibration_dir: Path) -> dict:
     """
-    Convert yolo11n/yolo11s at 320x320 (FP32/FP16/INT8) via Docker toolchain.
+    Convert yolo11n/yolo11s at 320x320 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
     Returns {(model_name, variant): Path-to-xml}.
     """
     if not _docker_image_available():
@@ -224,7 +238,7 @@ def compiled_yolo_models_320(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 
@@ -234,7 +248,7 @@ def compiled_yolo_models_320(calibration_dir: Path) -> dict:
 @pytest.fixture(scope="session")
 def compiled_yolo_models_320_batch4(calibration_dir: Path) -> dict:
     """
-    Convert yolo11n/yolo11s at 320x320 with batch=4 (FP32/FP16/INT8) via Docker toolchain.
+    Convert yolo11n/yolo11s at 320x320 with batch=4 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
     Returns {(model_name, variant): Path-to-xml}.
     """
     if not _docker_image_available():
@@ -267,7 +281,7 @@ def compiled_yolo_models_320_batch4(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 
@@ -321,7 +335,7 @@ def compiled_yolo_models_u8(calibration_dir: Path) -> dict:
 @pytest.fixture(scope="session")
 def compiled_yolo_models_26s(calibration_dir: Path) -> dict:
     """
-    Convert yolo26s at 640x640 and 320x320 (FP32/FP16/INT8) via Docker toolchain.
+    Convert yolo26s at 640x640 and 320x320 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
     Returns {(model_name, variant): Path-to-xml}.
     """
     if not _docker_image_available():
@@ -356,7 +370,7 @@ def compiled_yolo_models_26s(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 
@@ -366,7 +380,7 @@ def compiled_yolo_models_26s(calibration_dir: Path) -> dict:
 @pytest.fixture(scope="session")
 def compiled_yolo_models_26_batch(calibration_dir: Path) -> dict:
     """
-    Export yolo26s (batch=4) and yolo26m (batch=2), then convert (FP32/FP16/INT8)
+    Export yolo26s (batch=4) and yolo26m (batch=2), then convert (FP32/FP16/INT8/INT8_NPU)
     via the Docker toolchain image, caching to tests/compiled_models/.
 
     Returns {(model_name, variant): Path-to-xml}.
@@ -401,7 +415,7 @@ def compiled_yolo_models_26_batch(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 
@@ -449,7 +463,7 @@ def compiled_yolo_models_batch4(calibration_dir: Path) -> dict:
                 onnx,
                 COMPILED_DIR / model_name / variant,
                 config,
-                calibration_dir if variant == "INT8" else None,
+                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
             )
             result[(model_name, variant)] = xml
 

@@ -92,6 +92,24 @@ Example — bake u8 input + ÷255 normalisation into the IR:
 ```
 When quantization is also enabled, calibration images are fed in the configured format so NNCF statistics stay consistent.
 
+**config.json `optimization.quantization` keys** (when `enabled: true`):
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `preset` | `"mixed"` | `"mixed"` (asymmetric activations, better accuracy, use for CPU/GPU), `"performance"` (symmetric, required for NPU full fusion) |
+| `target_device` | `"any"` | `"any"` / `"cpu"` / `"gpu"` / `"npu"`. When `"npu"`: preset is forced to `"performance"` and attention/DFL subgraphs are kept in FP16 via IgnoredScope to avoid requantization overhead on the NPU compiler. |
+| `subset_size` | `300` | Number of calibration images. 128–300 is sufficient for PTQ with real images. |
+
+Example — NPU-targeted INT8 (attention/DFL kept in FP16):
+```json
+{ "optimization": { "quantization": { "enabled": true, "target_device": "npu" } } }
+```
+
+Example — CPU/GPU INT8 (mixed preset, no ignored scope):
+```json
+{ "optimization": { "quantization": { "enabled": true, "target_device": "any" } } }
+```
+
 **config.json `advanced` keys** (all optional):
 
 | Key | Default | Notes |
@@ -138,6 +156,7 @@ When `device_type="GPU"` and multiple GPU devices are present, the runtime autom
 | `max_queue_size` | `"100"` | Max pending items in the input and output queues. New inputs are rejected with a warning when either queue reaches this limit. Set to `"0"` to disable. |
 | `num_streams` | `"0"` (auto) | Number of parallel inference streams. `"0"` lets OpenVINO decide. Recommended `"4"` for discrete Intel GPU with `throughput` hint. No effect with `latency` hint. |
 | `auto_batch_size` | `"0"` (disabled) | Wraps the device in OpenVINO's `BATCH` pseudo-device to transparently aggregate concurrent requests into hardware batches. Set to the desired batch size (e.g. `"8"`). GPU only — ignored with a warning on CPU. |
+| `npu_turbo` | `"0"` (disabled) | Set to `"1"` to inject `NPU_TURBO=YES` into the compile config, raising the NPU clock to its maximum sustained frequency. Driver-permitting; silently ignored by the driver on unsupported platforms. Warning logged if set on a non-NPU device. |
 
 **Input dtype contract:** the runtime reads the IR's input element type from the compiled model and validates every enqueue call against it. The toolchain auto-bakes the correct type — FP32 models expect `f32`, FP16 models expect `f16`, INT8 models expect `u8`. Mismatches are rejected immediately with `RUNTIME_STATUS_INVALID_ARGUMENT`.
 
