@@ -191,17 +191,6 @@ END OF TERMS AND CONDITIONS
 
 ---
 
-## OAAX tools (c-utilities) (vendored)
-
-Source: https://github.com/OAAX-standard/tools
-Location: runtime-library/deps/tools/
-License: Apache License 2.0
-Used by: runtime library (tensor allocation, type utilities)
-
-See the Apache License 2.0 text above (same license).
-
----
-
 ## NNCF (Neural Network Compression Framework)
 
 Source: https://github.com/openvinotoolkit/nncf

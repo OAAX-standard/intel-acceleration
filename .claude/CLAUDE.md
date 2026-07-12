@@ -130,7 +130,7 @@ Example — keep batch dynamic:
 - `src/runtime_utils.cpp` — type mapping between `TensorElementType` and `ov::element::Type`
 - `include/oaax_runtime.h` — public C API (OAAX v2 interface)
 - `include/runtime_utils.hpp` — internal utilities
-- `deps/` — vendored: spdlog, concurrentqueue, c-utilities
+- `deps/` — vendored: spdlog, concurrentqueue
 
 **Inference architecture (v2):**
 - Per-model manager thread dequeues inputs, acquires a free `ov::InferRequest` slot, calls `start_async()`

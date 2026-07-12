@@ -13,8 +13,6 @@ set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(DEPS_DIR ${CMAKE_CURRENT_LIST_DIR}/deps)
 set(SPDLOG_DIR ${DEPS_DIR}/spdlog)
 set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
-set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
-set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
 set(MINIZ_DIR ${DEPS_DIR}/miniz)
 
 # === OpenVINO Configuration ===
@@ -130,9 +128,6 @@ set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_BUILD_FLAGS}")
 # Add spdlog for logging
 add_subdirectory(${SPDLOG_DIR} ${CMAKE_CURRENT_BINARY_DIR}/spdlog)
 
-# Add c-utilities
-add_subdirectory(${TOOLS_C_UTILITIES_DIR} ${CMAKE_CURRENT_BINARY_DIR}/c_utilities)
-
 # === Source Files ===
 file(GLOB_RECURSE SRC
   ${SRC_DIR}/runtime_utils.cpp
@@ -186,7 +181,6 @@ endif()
 # === Include Directories ===
 target_include_directories(RuntimeLibrary PUBLIC
   ${INCLUDE_DIR}
-  ${TOOLS_C_UTILITIES_INCLUDE_DIR}
   ${CONCURRENT_QUEUE_DIR}
   ${OPENVINO_INCLUDE_DIR}
 )
@@ -213,7 +207,6 @@ target_link_directories(RuntimeLibrary PUBLIC
 if(MSVC)
   target_link_libraries(RuntimeLibrary PUBLIC
     spdlog::spdlog
-    c_utilities
     openvino
     ws2_32 bcrypt
   )
@@ -236,7 +229,7 @@ else()
     -Wl,--start-group
     openvino
     spdlog::spdlog
-    pthread dl c_utilities stdc++
+    pthread dl stdc++
     -Wl,--end-group
   )
   # Copy only the OpenVINO libs needed at runtime: core, device plugins,

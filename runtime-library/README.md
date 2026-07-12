@@ -235,8 +235,7 @@ runtime-library/
 │   └── runtime_utils.hpp   # internal utilities
 ├── deps/
 │   ├── spdlog/             # logging
-│   ├── concurrentqueue/    # lock-free queue
-│   └── tools/c-utilities/  # OAAX C utilities
+│   └── concurrentqueue/    # lock-free queue
 ├── cmake/
 │   └── copy_windows_dlls.cmake
 ├── CMakeLists.txt

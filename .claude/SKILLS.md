@@ -814,7 +814,7 @@ endif()
 
 target_include_directories(RuntimeLibrary PUBLIC ${OPENVINO_INCLUDE_DIR})
 target_link_directories(RuntimeLibrary PUBLIC ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
-target_link_libraries(RuntimeLibrary PUBLIC openvino spdlog::spdlog pthread dl c_utilities stdc++)
+target_link_libraries(RuntimeLibrary PUBLIC openvino spdlog::spdlog pthread dl stdc++)
 ```
 
 ### Pattern: Copying OpenVINO libs post-build (Linux)

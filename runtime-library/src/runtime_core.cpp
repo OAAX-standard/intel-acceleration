@@ -61,6 +61,34 @@ static inline int sem_timedwait_ms(sem_t* s, int ms) {
 #include "runtime_utils.hpp"
 #include "zip_utils.hpp"
 
+// ─── CPU capability check ────────────────────────────────────────────────────
+// OpenVINO 2026.0+ requires AVX2 as the minimum x86-64 instruction set; on
+// older CPUs libopenvino crashes with an illegal-instruction fault. Detect it
+// up front so runtime_init can fail with a clear error instead.
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || \
+    defined(_M_IX86)
+#ifdef _MSC_VER
+#include <intrin.h>
+static bool cpu_supports_avx2() {
+  int info[4];
+  __cpuid(info, 1);
+  // AVX2 needs OS-enabled YMM state: OSXSAVE + XCR0 bits 1-2 (XMM|YMM).
+  if (!(info[2] & (1 << 27))) return false;
+  if ((_xgetbv(0) & 0x6) != 0x6) return false;
+  __cpuid(info, 0);
+  if (info[0] < 7) return false;
+  __cpuidex(info, 7, 0);
+  return (info[1] & (1 << 5)) != 0;  // EBX bit 5 = AVX2
+}
+#else
+static bool cpu_supports_avx2() { return __builtin_cpu_supports("avx2"); }
+#endif
+#else
+// Non-x86 (e.g. ARM): the AVX2 requirement does not apply.
+static bool cpu_supports_avx2() { return true; }
+#endif
+
 // ─── Profiling helpers ───────────────────────────────────────────────────────
 
 #ifdef OAAX_PROFILE
@@ -655,6 +683,14 @@ RuntimeStatus runtime_init(Config config) {
     g_logger->info(
         "  max_queue_size: {}",
         g_max_queue_size > 0 ? std::to_string(g_max_queue_size) : "disabled");
+
+    if (!cpu_supports_avx2()) {
+      set_error(
+          "CPU does not support AVX2 — OpenVINO 2026.0+ requires AVX2 as the "
+          "minimum instruction set on x86-64; this runtime cannot run on this "
+          "machine");
+      return RUNTIME_STATUS_DEVICE_ERROR;
+    }
 
     g_core = std::make_shared<ov::Core>();
 
