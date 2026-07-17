@@ -162,7 +162,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ Per-slot state struct + single `set_callback()` registration per slot (no std::function heap alloc per inference)
 - ✅ Memory leak verification: zero RSS growth over 10,000 INT8 inferences
 - ✅ INT8/FP16 quantization accuracy test (`test_quantization_accuracy.py`; FP16 cosine ≈1.000, INT8 cosine ≈0.9998)
-- ✅ Debug-only dispatch profiler (`runtime_profiler.hpp`): per-stage timing (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) enabled via `OAAX_PROFILE=1` (auto-set for Debug builds); zero overhead in Release
+- ❌ Dispatch profiler (`OAAX_PROFILE`): removed 2026-07-12 — all profiling and time-measurement code stripped from the runtime
 - ✅ Multi-GPU auto-detection: when `device_type="GPU"` and multiple GPUs present, automatically constructs `MULTI:GPU.0,GPU.1,...` string; use `perf_hint=cumulative_throughput` for best aggregate FPS
 - ✅ Batch-size throughput sweep (`tests/benchmark_batch_sweep.py`): exports YOLO .pt → ONNX with explicit batch, converts to IR, benchmarks yolo_test + benchmark_app across batches 1/2/4/8; results cached in `tests/compiled_models/_batch_sweep/`
 - ✅ stage2.py regex fix: updated parse patterns to match `Avg latency:` / `Min latency:` / `p95 latency:` output labels from yolo_test
@@ -192,7 +192,6 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
    - ✅ Semaphore-driven dispatch (no polling, no sleep)
    - ✅ Single callback registration per slot (no per-inference std::function alloc)
    - ✅ Multi-GPU auto-detection (MULTI plugin, `cumulative_throughput` hint)
-   - ✅ Debug-only profiler (`OAAX_PROFILE=1`); zero overhead in Release
    - ✅ Model caching across process restarts via `ov::cache_dir` (default=CWD; disable with `cache_dir=""`)
 
 4. **Packaging**
@@ -497,7 +496,12 @@ Note: `benchmark_app -d GPU` does NOT use MULTI — routes to fastest single GPU
 - **Impact:** Fixed Windows DLL bundling — `OPENVINO_BIN_DIR` was empty, causing the cmake -P script to copy nothing
 - **Status:** Fixed in CMakeLists.txt (line 30)
 
-**2026-04-12: Debug-only dispatch profiler (`OAAX_PROFILE`)**
+**2026-07-12: Profiler and time measurements removed**
+- **Decision:** Remove `runtime_profiler.hpp`, all `OAAX_PROFILE` code, and every remaining time-measurement (`elapsed_us` stopwatches, µs trace logs) from the runtime
+- **Rationale:** Profiling already answered its question (dispatch overhead <1.4% CPU / <0.3% GPU); the instrumentation was dead weight and noise
+- **Status:** Done — benchmark timing lives in the test harnesses (`yolo_test`, `benchmark_batch_sweep.py`) instead
+
+**2026-04-12: Debug-only dispatch profiler (`OAAX_PROFILE`)** *(superseded 2026-07-12: removed)*
 - **Decision:** Add `runtime_profiler.hpp` with `#ifdef OAAX_PROFILE` guards around atomic timing accumulators for all pipeline stages; enabled automatically for Debug builds via CMake
 - **Rationale:** Profiling confirmed dispatch overhead is <1.4% on CPU, <0.3% on GPU. The ~7% GPU throughput gap vs `benchmark_app` comes entirely from per-inference H2D+D2H memory transfers, not from runtime overhead
 - **Impact:** Zero overhead in Release builds (all macros expand to `((void)0)`); full pipeline breakdown available in Debug

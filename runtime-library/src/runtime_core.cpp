@@ -1,5 +1,4 @@
 #include <atomic>
-#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -89,143 +88,6 @@ static bool cpu_supports_avx2() { return __builtin_cpu_supports("avx2"); }
 static bool cpu_supports_avx2() { return true; }
 #endif
 
-// ─── Profiling helpers ───────────────────────────────────────────────────────
-
-#ifdef OAAX_PROFILE
-using ProfNs = long long;
-static inline ProfNs prof_now_ns() {
-  return (ProfNs)std::chrono::duration_cast<std::chrono::nanoseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-#define PROF_NOW() prof_now_ns()
-
-struct ProfStats {
-  std::atomic<long long> total_us{0};
-  std::atomic<long long> max_us{0};
-  std::atomic<long long> count{0};
-
-  void record(long long us) {
-    total_us += us;
-    count++;
-    long long prev = max_us.load(std::memory_order_relaxed);
-    while (us > prev &&
-           !max_us.compare_exchange_weak(prev, us, std::memory_order_relaxed));
-  }
-  void reset() {
-    total_us = 0;
-    max_us = 0;
-    count = 0;
-  }
-};
-
-static ProfStats g_prof_enqueue;
-static ProfStats g_prof_retrieve;
-static std::atomic<long long> g_prof_last_enqueue_us{0};
-
-// Shared smoothing factor for all profiling EMAs (~1000-sample effective
-// window).
-static constexpr double PROF_EMA_ALPHA = 0.002;
-
-// Throughput tracker: EMA of inter-event interval, inverted at read time.
-// EMA(1/dt) != 1/EMA(dt) — smoothing the interval avoids Jensen's inequality
-// bias that inflates fps when events arrive in bursts.
-struct ProfThroughput {
-  std::atomic<long long> count{0};
-  std::atomic<long long> first_ns{0};
-  std::atomic<long long> prev_ns{0};
-  std::atomic<long long> ema_interval_ns{0};  // EMA of inter-event gap
-
-  void record(ProfNs now) {
-    long long prev = prev_ns.exchange(now, std::memory_order_relaxed);
-    long long prev_first = first_ns.load(std::memory_order_relaxed);
-    if (prev_first == 0)
-      first_ns.compare_exchange_strong(prev_first, now,
-                                       std::memory_order_relaxed);
-    if (prev > 0 && now > prev) {
-      long long dt = now - prev;
-      long long prev_ema = ema_interval_ns.load(std::memory_order_relaxed);
-      long long ema =
-          prev_ema == 0
-              ? dt
-              : (long long)(PROF_EMA_ALPHA * dt +
-                            (1.0 - PROF_EMA_ALPHA) * (double)prev_ema);
-      ema_interval_ns.store(ema, std::memory_order_relaxed);
-    }
-    count++;
-  }
-  double ema_fps() const {
-    long long interval = ema_interval_ns.load(std::memory_order_relaxed);
-    return interval > 0 ? 1e9 / (double)interval : 0.0;
-  }
-  void reset() {
-    count = 0;
-    first_ns = 0;
-    prev_ns = 0;
-    ema_interval_ns = 0;
-  }
-};
-
-static ProfThroughput g_prof_throughput;        // output rate (retrieve_output)
-static ProfThroughput g_prof_input_throughput;  // input rate (enqueue_input)
-
-// EMA-smoothed per-field stats, printed every PRINT_INTERVAL retrievals.
-// The EMA is never reset between prints — it stays warm across the whole run.
-struct ProfWindow {
-  static constexpr int PRINT_INTERVAL = 100;
-  static constexpr double ALPHA = PROF_EMA_ALPHA;
-
-  int count{0};
-  bool initialized{false};
-  double ema_dispatch{0}, ema_setup{0}, ema_infer{0}, ema_build{0},
-      ema_total{0}, ema_enqueue{0}, ema_retrieve{0};
-
-  void add(double dispatch, double setup, double infer, double build,
-           double total, double enqueue_ms, double retrieve_ms) {
-    if (!initialized) {
-      ema_dispatch = dispatch;
-      ema_setup = setup;
-      ema_infer = infer;
-      ema_build = build;
-      ema_total = total;
-      ema_enqueue = enqueue_ms;
-      ema_retrieve = retrieve_ms;
-      initialized = true;
-    } else {
-      auto upd = [](double prev, double x) {
-        return ALPHA * x + (1.0 - ALPHA) * prev;
-      };
-      ema_dispatch = upd(ema_dispatch, dispatch);
-      ema_setup = upd(ema_setup, setup);
-      ema_infer = upd(ema_infer, infer);
-      ema_build = upd(ema_build, build);
-      ema_total = upd(ema_total, total);
-      ema_enqueue = upd(ema_enqueue, enqueue_ms);
-      ema_retrieve = upd(ema_retrieve, retrieve_ms);
-    }
-    ++count;
-  }
-
-  bool should_flush() {
-    if (count < PRINT_INTERVAL) return false;
-    count = 0;
-    return true;
-  }
-
-  void reset() {
-    count = 0;
-    initialized = false;
-    ema_dispatch = ema_setup = ema_infer = ema_build = ema_total = ema_enqueue =
-        ema_retrieve = 0;
-  }
-};
-
-static ProfWindow g_prof_window;
-
-#else
-#define PROF_NOW() 0LL
-#endif
-
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 static void deep_free_tensors(Tensors* t) {
@@ -245,11 +107,6 @@ static void deep_free_tensors(Tensors* t) {
 
 struct SlotState {
   Tensors* input{nullptr};
-#ifdef OAAX_PROFILE
-  ProfNs t_enqueue_ns{0};   // when caller called runtime_enqueue_input
-  ProfNs t_dispatch_ns{0};  // when dispatch_to_slot() was entered
-  ProfNs t_async_ns{0};     // just before start_async()
-#endif
 };
 
 struct ModelState {
@@ -259,11 +116,6 @@ struct ModelState {
   std::vector<SlotState> slot_states;
   moodycamel::ConcurrentQueue<Tensors*> input_queue;
   moodycamel::ConcurrentQueue<int> free_slots;
-#ifdef OAAX_PROFILE
-  // Mirrors input_queue — stores enqueue timestamp for each queued input
-  // (FIFO).
-  moodycamel::ConcurrentQueue<ProfNs> enqueue_times;
-#endif
   sem_t input_sem;
   std::thread manager_thread;
   std::atomic<bool> stop{false};
@@ -277,10 +129,6 @@ struct ModelState {
 struct OutputItem {
   int model_id;
   Tensors* tensors;
-#ifdef OAAX_PROFILE
-  double dispatch_ms{0}, setup_ms{0}, infer_ms{0}, build_ms{0}, total_ms{0};
-  int slot_idx{0};
-#endif
 };
 
 // ─── Global state
@@ -336,12 +184,6 @@ static void config_warn_unknown(const Config& cfg,
     if (!found)
       g_logger->warn("Unknown config key '{}' — ignored", cfg.keys[i]);
   }
-}
-
-static inline long long elapsed_us(std::chrono::steady_clock::time_point t0) {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::steady_clock::now() - t0)
-      .count();
 }
 
 static void set_error(const std::string& msg) {
@@ -410,13 +252,6 @@ static void dispatch_to_slot(int model_id, int slot_idx, Tensors* input) {
   SlotState& s = m.slot_states[slot_idx];
   s.input = input;
 
-#ifdef OAAX_PROFILE
-  ProfNs t_enqueue = 0;
-  m.enqueue_times.try_dequeue(t_enqueue);
-  s.t_enqueue_ns = t_enqueue;
-  s.t_dispatch_ns = PROF_NOW();
-#endif
-
   ov::InferRequest& req = m.infer_requests[slot_idx];
   try {
     for (int i = 0; i < input->num_tensors; ++i) {
@@ -435,9 +270,6 @@ static void dispatch_to_slot(int model_id, int slot_idx, Tensors* input) {
     return;
   }
 
-#ifdef OAAX_PROFILE
-  s.t_async_ns = PROF_NOW();
-#endif
   g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
   req.start_async();
 }
@@ -449,9 +281,6 @@ static void on_inference_complete(int model_id, int slot_idx,
   ModelState& m = *g_models[model_id];
   SlotState& s = m.slot_states[slot_idx];
   int request_id = s.input ? s.input->id : 0;
-#ifdef OAAX_PROFILE
-  ProfNs t_callback = PROF_NOW();
-#endif
 
   if (ex) {
     try {
@@ -467,14 +296,6 @@ static void on_inference_complete(int model_id, int slot_idx,
   }
 
   Tensors* output = build_output(model_id, slot_idx, request_id);
-#ifdef OAAX_PROFILE
-  // Snapshot slot timestamps before dispatch_to_slot() may overwrite them.
-  ProfNs snap_enqueue = s.t_enqueue_ns;
-  ProfNs snap_dispatch = s.t_dispatch_ns;
-  ProfNs snap_async = s.t_async_ns;
-  ProfNs t_output_built = PROF_NOW();
-  auto ns2ms = [](ProfNs a, ProfNs b) { return (b - a) / 1e6; };
-#endif
   deep_free_tensors(s.input);
   s.input = nullptr;
 
@@ -490,14 +311,6 @@ static void on_inference_complete(int model_id, int slot_idx,
   }
 
   OutputItem out_item{model_id, output};
-#ifdef OAAX_PROFILE
-  out_item.slot_idx = slot_idx;
-  out_item.dispatch_ms = ns2ms(snap_enqueue, snap_dispatch);
-  out_item.setup_ms = ns2ms(snap_dispatch, snap_async);
-  out_item.infer_ms = ns2ms(snap_async, t_callback);
-  out_item.build_ms = ns2ms(t_callback, t_output_built);
-  out_item.total_ms = ns2ms(snap_enqueue, t_output_built);
-#endif
 
   if (output && g_output_queue.try_enqueue(std::move(out_item))) {
     sem_post(&g_output_sem);
@@ -674,15 +487,20 @@ RuntimeStatus runtime_init(Config config) {
   try {
     g_logger = initialize_logger(g_log_file, g_log_level, g_log_stdout,
                                  g_log_level, runtime_get_name());
-    g_logger->info("Initializing runtime");
-    g_logger->info("  device_type: {}", g_device_type);
-    g_logger->info("  perf_hint:   {}", g_perf_hint);
-    g_logger->info("  log_level:   {}", g_log_level);
-    g_logger->info("  log_file:    {}", g_log_file);
-    g_logger->info("  log_stdout:     {}", g_log_stdout ? "true" : "false");
+    g_logger->info("Initializing runtime v{} (OpenVINO {})", RUNTIME_VERSION,
+                   ov::get_openvino_version().buildNumber);
+    g_logger->info("Configuration:");
+    g_logger->info("  device_type:     {}", g_device_type);
+    g_logger->info("  perf_hint:       {}", g_perf_hint);
+    g_logger->info("  log_level:       {}", g_log_level);
+    g_logger->info("  log_file:        {}", g_log_file);
+    g_logger->info("  log_stdout:      {}", g_log_stdout ? "true" : "false");
     g_logger->info(
-        "  max_queue_size: {}",
+        "  max_queue_size:  {}",
         g_max_queue_size > 0 ? std::to_string(g_max_queue_size) : "disabled");
+    g_logger->info("  num_requests:    {}", g_num_requests > 0
+                                                ? std::to_string(g_num_requests)
+                                                : "auto");
 
     if (!cpu_supports_avx2()) {
       set_error(
@@ -701,13 +519,14 @@ RuntimeStatus runtime_init(Config config) {
         auto canon = std::filesystem::canonical(g_cache_dir, ec);
         std::string cp = ec ? g_cache_dir : canon.string();
         g_core->set_property(ov::cache_dir(cp));
-        g_logger->info("  cache_dir: {} (active)", cp);
+        g_logger->info("  cache_dir:       {} (active)", cp);
       } else {
-        g_logger->warn("  cache_dir: cannot create '{}' — caching disabled",
-                       g_cache_dir);
+        g_logger->warn(
+            "  cache_dir:       cannot create '{}' — caching disabled",
+            g_cache_dir);
       }
     } else {
-      g_logger->info("  cache_dir: (disabled)");
+      g_logger->info("  cache_dir:       (disabled)");
     }
 
     g_logger->info("  num_streams:     {}",
@@ -746,6 +565,7 @@ RuntimeStatus runtime_init(Config config) {
     // wipes the nwaiters field, causing sem_post to never issue futex_wake.
     sem_init(&g_output_sem, 0, 0);
     g_initialized = true;
+    g_logger->info("Runtime initialized successfully");
     return RUNTIME_STATUS_SUCCESS;
   } catch (const std::exception& e) {
     g_last_error = e.what();
@@ -801,14 +621,26 @@ RuntimeStatus runtime_load_models(int num_models,
 
       auto model = g_core->read_model(xml_path);
 
-      // Log the expected input dtype as declared in the IR. The toolchain bakes
+      // Log the model I/O contract as declared in the IR. The toolchain bakes
       // the correct input type into the model (f32 / f16 / u8), so no runtime
       // PPP conversion is needed — callers must match the IR's input type.
       for (size_t i = 0; i < model->inputs().size(); ++i) {
-        auto type = model->input(i).get_element_type();
-        auto name = model->input(i).get_any_name();
-        g_logger->info("[model {}] Input '{}' expects: {}", m_idx, name,
-                       type.to_string());
+        const auto& inp = model->input(i);
+        g_logger->info("[model {}] Input  '{}': {} {}", m_idx,
+                       inp.get_any_name(), inp.get_element_type().to_string(),
+                       inp.get_partial_shape().to_string());
+      }
+      for (size_t i = 0; i < model->outputs().size(); ++i) {
+        const auto& out = model->output(i);
+        std::string name;
+        try {
+          name = out.get_any_name();
+        } catch (...) {
+          name = "<unnamed>";
+        }
+        g_logger->info("[model {}] Output '{}': {} {}", m_idx, name,
+                       out.get_element_type().to_string(),
+                       out.get_partial_shape().to_string());
       }
 
       std::string eff_device = resolve_device(device);
@@ -973,6 +805,7 @@ RuntimeStatus runtime_load_models(int num_models,
   }
 
   g_models_loaded = true;
+  g_logger->info("{} model(s) loaded and ready", num_models);
   return RUNTIME_STATUS_SUCCESS;
 
 fail:
@@ -1006,7 +839,6 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   }
 
   ModelState& m = *g_models[model_id];
-  auto t0 = std::chrono::steady_clock::now();
 
   // Validate input dtypes against the compiled model's expected types.
   for (int i = 0; i < input_tensors->num_tensors; ++i) {
@@ -1037,9 +869,6 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
           "[model {}] Input queue at capacity ({}/{}), rejecting input id={}",
           model_id, in_pending, g_max_queue_size, input_tensors->id);
       set_error("runtime_enqueue_input: input queue at capacity");
-      g_logger->trace(
-          "[enqueue model={} id={}] rejected (input queue full) {}µs", model_id,
-          input_tensors->id, elapsed_us(t0));
       return RUNTIME_STATUS_ERROR;
     }
     size_t out_pending = g_output_queue.size_approx();
@@ -1048,29 +877,16 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
           "[model {}] Output queue at capacity ({}/{}), rejecting input id={}",
           model_id, out_pending, g_max_queue_size, input_tensors->id);
       set_error("runtime_enqueue_input: output queue at capacity");
-      g_logger->trace(
-          "[enqueue model={} id={}] rejected (output queue full) {}µs",
-          model_id, input_tensors->id, elapsed_us(t0));
       return RUNTIME_STATUS_ERROR;
     }
   }
-
-#ifdef OAAX_PROFILE
-  m.enqueue_times.try_enqueue(PROF_NOW());
-#endif
 
   // Fast path: an idle slot is available — dispatch directly, no thread hop.
   int idle_slot = -1;
   if (m.free_slots.try_dequeue(idle_slot)) {
     dispatch_to_slot(model_id, idle_slot, input_tensors);
-    long long us = elapsed_us(t0);
-    g_logger->trace("[enqueue model={} id={}] fast path {}µs", model_id,
-                    input_tensors->id, us);
-#ifdef OAAX_PROFILE
-    g_prof_enqueue.record(us);
-    g_prof_last_enqueue_us.store(us, std::memory_order_relaxed);
-    g_prof_input_throughput.record(PROF_NOW());
-#endif
+    g_logger->trace("[enqueue model={} id={}] fast path (direct dispatch)",
+                    model_id, input_tensors->id);
     return RUNTIME_STATUS_SUCCESS;
   }
 
@@ -1078,29 +894,13 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   // Also post input_sem as a safety net for the race where a callback goes idle
   // between our free_slots check and the input_queue.enqueue below.
   if (!m.input_queue.try_enqueue(input_tensors)) {
-#ifdef OAAX_PROFILE
-    ProfNs dummy;
-    m.enqueue_times.try_dequeue(dummy);  // rollback timestamp
-#endif
     set_error("runtime_enqueue_input: input queue full");
-    g_logger->trace("[enqueue model={} id={}] rejected (enqueue failed) {}µs",
-                    model_id, input_tensors->id, elapsed_us(t0));
     return RUNTIME_STATUS_ERROR;
   }
   sem_post(&m.input_sem);
 
-  {
-    long long us = elapsed_us(t0);
-    g_logger->debug("[model {}] Input enqueued id={} (input_queue={})",
-                    model_id, input_tensors->id, m.input_queue.size_approx());
-    g_logger->trace("[enqueue model={} id={}] slow path {}µs", model_id,
-                    input_tensors->id, us);
-#ifdef OAAX_PROFILE
-    g_prof_enqueue.record(us);
-    g_prof_last_enqueue_us.store(us, std::memory_order_relaxed);
-    g_prof_input_throughput.record(PROF_NOW());
-#endif
-  }
+  g_logger->debug("[model {}] Input enqueued id={} (input_queue={})", model_id,
+                  input_tensors->id, m.input_queue.size_approx());
   return RUNTIME_STATUS_SUCCESS;
 }
 
@@ -1113,11 +913,9 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
     return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
 
-  auto t0 = std::chrono::steady_clock::now();
-
   if (!wait_for_output(timeout_ms)) {
-    g_logger->trace("[retrieve] no output (timeout={}ms) {}µs", timeout_ms,
-                    elapsed_us(t0));
+    g_logger->trace("[retrieve] no output available (timeout={}ms)",
+                    timeout_ms);
     return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
   }
 
@@ -1132,9 +930,8 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
       if (++retries > 200) {
         sem_post(&g_output_sem);
         g_logger->warn(
-            "[retrieve] dequeue miss after {} retries — semaphore restored "
-            "{}µs",
-            retries, elapsed_us(t0));
+            "[retrieve] dequeue miss after {} retries — semaphore restored",
+            retries);
         return RUNTIME_STATUS_NO_OUTPUT_AVAILABLE;
       }
       std::this_thread::yield();
@@ -1143,42 +940,9 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
 
   *model_id = item.model_id;
   *output_tensors = item.tensors;
-  {
-    long long us = elapsed_us(t0);
-    g_logger->debug("[model {}] Output retrieved id={} (output_queue={})",
-                    item.model_id, item.tensors->id,
-                    g_output_queue.size_approx());
-    g_logger->trace("[retrieve model={} id={}] {}µs", item.model_id,
-                    item.tensors->id, us);
-#ifdef OAAX_PROFILE
-    g_prof_retrieve.record(us);
-    g_prof_throughput.record(PROF_NOW());
-    double enqueue_ms =
-        g_prof_last_enqueue_us.load(std::memory_order_relaxed) / 1000.0;
-    double retrieve_ms = us / 1000.0;
-    g_logger->info(
-        "[prof model={} slot={} req={}] "
-        "dispatch={:.3f}ms setup={:.3f}ms infer={:.3f}ms build={:.3f}ms "
-        "total={:.3f}ms enqueue={:.3f}ms retrieve={:.3f}ms "
-        "in={:.1f} fps out={:.1f} fps (ema)",
-        item.model_id, item.slot_idx, item.tensors->id, item.dispatch_ms,
-        item.setup_ms, item.infer_ms, item.build_ms, item.total_ms, enqueue_ms,
-        retrieve_ms, g_prof_input_throughput.ema_fps(),
-        g_prof_throughput.ema_fps());
-    g_prof_window.add(item.dispatch_ms, item.setup_ms, item.infer_ms,
-                      item.build_ms, item.total_ms, enqueue_ms, retrieve_ms);
-    if (g_prof_window.should_flush())
-      g_logger->info(
-          "[prof ema] dispatch={:.3f}ms setup={:.3f}ms infer={:.3f}ms "
-          "build={:.3f}ms total={:.3f}ms enqueue={:.3f}ms retrieve={:.3f}ms "
-          "in={:.1f} fps out={:.1f} fps",
-          g_prof_window.ema_dispatch, g_prof_window.ema_setup,
-          g_prof_window.ema_infer, g_prof_window.ema_build,
-          g_prof_window.ema_total, g_prof_window.ema_enqueue,
-          g_prof_window.ema_retrieve, g_prof_input_throughput.ema_fps(),
-          g_prof_throughput.ema_fps());
-#endif
-  }
+  g_logger->debug("[model {}] Output retrieved id={} (output_queue={})",
+                  item.model_id, item.tensors->id,
+                  g_output_queue.size_approx());
   return RUNTIME_STATUS_SUCCESS;
 }
 
@@ -1186,72 +950,6 @@ RuntimeStatus runtime_cleanup(void) {
   if (!g_initialized) return RUNTIME_STATUS_SUCCESS;  // idempotent
 
   g_logger->info("Cleaning up runtime...");
-#ifdef OAAX_PROFILE
-  g_logger->info("[prof] Field guide:");
-  g_logger->info(
-      "[prof]   dispatch = time input spent waiting in the input queue");
-  g_logger->info(
-      "[prof]   setup    = tensor binding overhead before start_async()");
-  g_logger->info(
-      "[prof]   infer    = OpenVINO inference time (start_async to callback)");
-  g_logger->info("[prof]   build    = output malloc + memcpy after inference");
-  g_logger->info(
-      "[prof]   total    = dispatch + setup + infer + build (end-to-end "
-      "latency)");
-  g_logger->info(
-      "[prof]   enqueue  = time spent inside runtime_enqueue_input() (caller "
-      "cost, ms)");
-  g_logger->info(
-      "[prof]   retrieve = time spent inside runtime_retrieve_output() incl. "
-      "wait (caller cost, ms)");
-  g_logger->info(
-      "[prof]   in  fps = rate at which the client feeds inputs (img/s, ema)");
-  g_logger->info(
-      "[prof]   out fps = rate at which the client retrieves outputs (img/s, "
-      "ema)");
-
-  auto print_stats = [&](const char* name, ProfStats& s) {
-    long long n = s.count.load();
-    if (n == 0) return;
-    double avg_ms = (double)s.total_us.load() / (double)n / 1000.0;
-    double max_ms = s.max_us.load() / 1000.0;
-    g_logger->info("[prof] {:>8} calls={} avg={:.3f}ms max={:.3f}ms", name, n,
-                   avg_ms, max_ms);
-  };
-  print_stats("enqueue", g_prof_enqueue);
-  print_stats("retrieve", g_prof_retrieve);
-  {
-    long long n = g_prof_throughput.count.load();
-    long long first = g_prof_throughput.first_ns.load();
-    long long last = g_prof_throughput.prev_ns.load();
-    if (n > 1 && last > first) {
-      double elapsed_s = (double)(last - first) / 1e9;
-      double fps = (double)(n - 1) / elapsed_s;  // n-1 intervals for n events
-      g_logger->info(
-          "[prof] out throughput calls={} elapsed={:.3f}s avg={:.1f} fps "
-          "final_ema={:.1f} fps",
-          n, elapsed_s, fps, g_prof_throughput.ema_fps());
-    }
-    {
-      long long ni = g_prof_input_throughput.count.load();
-      long long fi = g_prof_input_throughput.first_ns.load();
-      long long li = g_prof_input_throughput.prev_ns.load();
-      if (ni > 1 && li > fi) {
-        double elapsed_s = (double)(li - fi) / 1e9;
-        double fps = (double)(ni - 1) / elapsed_s;
-        g_logger->info(
-            "[prof] in  throughput calls={} elapsed={:.3f}s avg={:.1f} fps "
-            "final_ema={:.1f} fps",
-            ni, elapsed_s, fps, g_prof_input_throughput.ema_fps());
-      }
-    }
-  }
-  g_prof_enqueue.reset();
-  g_prof_retrieve.reset();
-  g_prof_throughput.reset();
-  g_prof_input_throughput.reset();
-  g_prof_window.reset();
-#endif
 
   // Stop all manager threads and wait for in-flight requests
   for (auto* ms : g_models) {
