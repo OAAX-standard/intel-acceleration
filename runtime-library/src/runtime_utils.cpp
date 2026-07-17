@@ -5,8 +5,8 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
-#include <iostream>
 #include <openvino/openvino.hpp>
+#include <vector>
 
 ov::element::Type map_to_ov_type(TensorElementType t) {
   switch (t) {
@@ -74,44 +74,49 @@ std::shared_ptr<spdlog::logger> initialize_logger(const std::string &log_file,
                                                   bool log_to_stdout,
                                                   int console_level,
                                                   const std::string prefix) {
+  static auto thread_pool =
+      std::make_shared<spdlog::details::thread_pool>(8192, 1);
+
+  std::vector<spdlog::sink_ptr> sinks;
+  int effective_level = file_level;
+  std::string file_sink_error;
+
   try {
     // rotate_on_open=true: each launch starts a fresh runtime.log; the previous
     // three sessions are kept as runtime.1.log / .2.log / .3.log.
     auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_st>(
         log_file, 1024 * 1024 * 5, 4, true);
     file_sink->set_level(static_cast<spdlog::level::level_enum>(file_level));
-
-    spdlog::sinks_init_list sinks;
-    int effective_level = file_level;
-
-    std::shared_ptr<spdlog::async_logger> logger;
-    static auto thread_pool =
-        std::make_shared<spdlog::details::thread_pool>(8192, 1);
-
-    if (log_to_stdout) {
-      auto console_sink =
-          std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-      console_sink->set_level(
-          static_cast<spdlog::level::level_enum>(console_level));
-      effective_level = std::min(file_level, console_level);
-      logger = std::make_shared<spdlog::async_logger>(
-          prefix, spdlog::sinks_init_list{console_sink, file_sink}, thread_pool,
-          spdlog::async_overflow_policy::overrun_oldest);
-    } else {
-      logger = std::make_shared<spdlog::async_logger>(
-          prefix, spdlog::sinks_init_list{file_sink}, thread_pool,
-          spdlog::async_overflow_policy::overrun_oldest);
-    }
-
-    spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [" + prefix + "] [%^%l%$] %v");
-    logger->set_level(static_cast<spdlog::level::level_enum>(effective_level));
-    logger->flush_on(spdlog::level::trace);
-
-    return logger;
+    sinks.push_back(file_sink);
   } catch (const spdlog::spdlog_ex &ex) {
-    std::cerr << "Logger initialization failed: " << ex.what() << "\n";
-    exit(EXIT_FAILURE);
+    // The log file may be unwritable (e.g. the host's CWD is a system
+    // directory on Windows). A shared library must never terminate its host
+    // over logging — fall back to console-only output and keep going.
+    file_sink_error = ex.what();
   }
+
+  if (log_to_stdout || !file_sink_error.empty()) {
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    int level = log_to_stdout ? console_level : file_level;
+    console_sink->set_level(static_cast<spdlog::level::level_enum>(level));
+    effective_level = std::min(effective_level, level);
+    sinks.push_back(console_sink);
+  }
+
+  auto logger = std::make_shared<spdlog::async_logger>(
+      prefix, sinks.begin(), sinks.end(), thread_pool,
+      spdlog::async_overflow_policy::overrun_oldest);
+
+  spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [" + prefix + "] [%^%l%$] %v");
+  logger->set_level(static_cast<spdlog::level::level_enum>(effective_level));
+  logger->flush_on(spdlog::level::trace);
+
+  if (!file_sink_error.empty()) {
+    logger->warn("Could not open log file '{}': {} — logging to console only",
+                 log_file, file_sink_error);
+  }
+
+  return logger;
 }
 
 void destroy_logger(std::shared_ptr<spdlog::logger> logger) {
