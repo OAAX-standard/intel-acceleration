@@ -45,7 +45,14 @@ def cli():
     logs = Logs()
 
     try:
-        logs.add_message("Starting OpenVINO conversion", {"Input bundle": input_zip, "Output directory": output_dir})
+        try:
+            from openvino import __version__ as ov_version
+        except Exception:
+            ov_version = "unknown"
+        logs.add_message(
+            "Starting OpenVINO conversion",
+            {"Input bundle": input_zip, "Output directory": output_dir, "OpenVINO version": ov_version},
+        )
 
         # Calculate MD5 of input (with error handling)
         try:
@@ -92,10 +99,7 @@ def cli():
         # Calculate hash for zip file
         zip_md5 = md5_hash(zip_path)
 
-        # Save logs
-        logs.save_as_json(logs_path)
-
-        # Add final success message to logs
+        # Add final success message, then save so logs.json includes it
         logs.add_message(
             "Successful Conversion",
             {
@@ -111,6 +115,7 @@ def cli():
                 },
             },
         )
+        logs.save_as_json(logs_path)
 
         print(logs)
 
