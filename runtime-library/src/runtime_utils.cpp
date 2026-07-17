@@ -69,13 +69,20 @@ TensorElementType map_from_ov_type(ov::element::Type type) {
                            type.get_type_name());
 }
 
+// Owned here (not a function-local static) so shutdown_logging() can join the
+// pool's worker thread during runtime_cleanup. A static would only be
+// destroyed at library unload — under the loader lock on Windows, where
+// joining a thread deadlocks, and the still-running worker pins the DLL.
+static std::shared_ptr<spdlog::details::thread_pool> g_logging_pool;
+
 std::shared_ptr<spdlog::logger> initialize_logger(const std::string &log_file,
                                                   int file_level,
                                                   bool log_to_stdout,
                                                   int console_level,
                                                   const std::string prefix) {
-  static auto thread_pool =
-      std::make_shared<spdlog::details::thread_pool>(8192, 1);
+  if (!g_logging_pool)
+    g_logging_pool = std::make_shared<spdlog::details::thread_pool>(8192, 1);
+  auto thread_pool = g_logging_pool;
 
   std::vector<spdlog::sink_ptr> sinks;
   int effective_level = file_level;
@@ -125,4 +132,11 @@ void destroy_logger(std::shared_ptr<spdlog::logger> logger) {
     spdlog::drop(logger->name());
     logger = nullptr;
   }
+}
+
+void shutdown_logging() {
+  // The pool destructor posts a terminate message and joins the worker
+  // thread. Loggers hold a reference to the pool, so this must run after
+  // every logger created by initialize_logger has been destroyed.
+  g_logging_pool.reset();
 }

@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -564,6 +565,23 @@ RuntimeStatus runtime_init(Config config) {
     // sem_timedwait before sem_init runs, and the subsequent sem_init memset
     // wipes the nwaiters field, causing sem_post to never issue futex_wake.
     sem_init(&g_output_sem, 0, 0);
+
+#ifndef _WIN32
+    // Safety net for hosts that dlclose() or exit without calling
+    // runtime_cleanup(): glibc's per-DSO atexit runs this at unload, before
+    // static destructors and before the code is unmapped, so runtime threads
+    // are joined instead of crashing on unmapped code. Registered here (not
+    // as a static destructor) so it runs before all static teardown, and
+    // only once per process. Not used on Windows: DLL_PROCESS_DETACH runs
+    // under the loader lock, where joining threads deadlocks — Windows hosts
+    // must call runtime_cleanup() before FreeLibrary.
+    static const bool cleanup_hook_registered = [] {
+      std::atexit([] { runtime_cleanup(); });
+      return true;
+    }();
+    (void)cleanup_hook_registered;
+#endif
+
     g_initialized = true;
     g_logger->info("Runtime initialized successfully");
     return RUNTIME_STATUS_SUCCESS;
@@ -976,6 +994,10 @@ RuntimeStatus runtime_cleanup(void) {
   sem_destroy(&g_output_sem);
 
   g_core.reset();
+  // Unload OpenVINO plugin libraries and release their global resources so
+  // as few of their threads as possible outlive cleanup (they can pin
+  // openvino/plugin DLLs on Windows and block replacing the runtime folder).
+  ov::shutdown();
   g_initialized = false;
   g_models_loaded = false;
   g_last_error.clear();
@@ -983,6 +1005,10 @@ RuntimeStatus runtime_cleanup(void) {
   g_logger->info("Runtime cleanup complete.");
   destroy_logger(g_logger);
   g_logger = nullptr;
+  // Join the async logging thread last — after this, no thread whose code
+  // lives in this library is left running, so the host can FreeLibrary()
+  // and delete/replace the file on Windows.
+  shutdown_logging();
 
   return RUNTIME_STATUS_SUCCESS;
 }

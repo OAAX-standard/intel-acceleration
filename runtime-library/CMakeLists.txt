@@ -116,7 +116,16 @@ if(NOT MSVC)
   # (_GLIBCXX_USE_CXX11_ABI=1, the default). Do NOT force the old ABI here —
   # doing so would mangle std::string differently and cause ov:: symbol mismatches.
   set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
+  # Unloadability (dlclose must actually unmap the runtime so it can be
+  # hot-swapped; the Windows analogue is FreeLibrary releasing the DLL file):
+  # - -fno-gnu-unique: STB_GNU_UNIQUE symbols (template statics in spdlog/
+  #   fmt/moodycamel) make glibc permanently refuse to unload the DSO.
+  # - -fvisibility=hidden/-fvisibility-inlines-hidden: only OAAX_EXPORT
+  #   symbols are exported. Without this, NODELETE libraries (libstdc++,
+  #   libopenvino) bind vague-linkage symbols to our copies during group
+  #   relocation ("relocation dependency"), transitively pinning this
+  #   library in the process forever.
+  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -fno-gnu-unique -fvisibility=hidden -fvisibility-inlines-hidden")
   set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
 endif()
 
@@ -145,6 +154,12 @@ if(NOT MSVC)
   # TBB, but the cross-compiler sysroot does not. Allow unresolved shared-library
   # symbols so the linker doesn't fail — they are satisfied at runtime.
   target_link_options(RuntimeLibrary PRIVATE "-Wl,--allow-shlib-undefined")
+  # Export only the OAAX C API — see cmake/runtime.map for why this is
+  # required for the library to be unloadable at all.
+  target_link_options(RuntimeLibrary PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime.map")
+  set_target_properties(RuntimeLibrary PROPERTIES
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime.map")
 endif()
 
 # === Optimization Flags ===
@@ -168,14 +183,6 @@ else()
   elseif("${CMAKE_BUILD_TYPE}" STREQUAL "MinSizeRel")
     target_compile_options(RuntimeLibrary PUBLIC -Os -g)
   endif()
-endif()
-
-# Enable dispatch-pipeline profiling.
-# Automatically on for Debug; pass -DOAAX_PROFILE=ON to enable in other build types.
-option(OAAX_PROFILE "Enable per-stage inference profiling (adds log lines per request)" OFF)
-if(OAAX_PROFILE OR "${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-  target_compile_definitions(RuntimeLibrary PUBLIC OAAX_PROFILE=1)
-  message(STATUS "OAAX_PROFILE=1 enabled")
 endif()
 
 # === Include Directories ===

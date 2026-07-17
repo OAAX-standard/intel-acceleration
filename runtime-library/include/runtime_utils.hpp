@@ -18,4 +18,11 @@ std::shared_ptr<spdlog::logger> initialize_logger(
 
 void destroy_logger(std::shared_ptr<spdlog::logger> logger);
 
+// Joins and destroys the async logging thread pool. Call after the last
+// logger is destroyed (runtime_cleanup) so no thread whose code lives in
+// this library outlives cleanup — on Windows a surviving thread pins the
+// DLL in the host process, and joining it later from DllMain (static
+// destruction under the loader lock) can deadlock.
+void shutdown_logging();
+
 #endif  // RUNTIME_UTILS_HPP
