@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
     const char *name = runtime_get_name();
     ASSERT(ver && strlen(ver) > 0, "version is empty");
     ASSERT(name && strlen(name) > 0, "name is empty");
-    ASSERT(strcmp(name, "OAAX Intel Runtime (OpenVINO Native)") == 0, std::string("unexpected name: ") + name);
+    ASSERT(strcmp(name, "OAAX Intel") == 0, std::string("unexpected name: ") + name);
     std::cout << "  name: " << name << "  version: " << ver << std::endl;
     PASS("version and name correct");
 

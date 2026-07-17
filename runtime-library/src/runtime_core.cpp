@@ -993,9 +993,7 @@ const char* runtime_get_error(void) {
 
 const char* runtime_get_version(void) { return RUNTIME_VERSION; }
 
-const char* runtime_get_name(void) {
-  return "OAAX Intel Runtime (OpenVINO Native)";
-}
+const char* runtime_get_name(void) { return "OAAX Intel"; }
 
 const char* runtime_get_info(void) {
   if (!g_initialized) return nullptr;
