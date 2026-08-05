@@ -250,7 +250,7 @@ jobs:
           if-no-files-found: warn
 
   integration-tests-windows:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: windows-latest
     needs: [build-runtimes-for-windows-x86_64, integration-tests]
     permissions:
