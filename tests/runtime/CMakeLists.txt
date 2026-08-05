@@ -18,7 +18,7 @@ endif()
 message(STATUS "Runtime include dir: ${RUNTIME_INCLUDE_DIR}")
 message(STATUS "Runtime lib dir:     ${RUNTIME_LIB_DIR}")
 
-foreach(TEST_NAME simple_test yolo_test multi_model_test output_validation_test)
+foreach(TEST_NAME simple_test yolo_test multi_model_test output_validation_test lifecycle_test)
     add_executable(${TEST_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_NAME}.cpp)
     target_include_directories(${TEST_NAME} PRIVATE ${RUNTIME_INCLUDE_DIR})
     target_link_directories(${TEST_NAME} PRIVATE ${RUNTIME_LIB_DIR})
