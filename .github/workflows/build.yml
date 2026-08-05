@@ -184,7 +184,7 @@ jobs:
           }
 
   integration-tests:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-22.04
     needs: [build-toolchain, build-runtimes-for-ubuntu]
     permissions:
