@@ -1,15 +1,13 @@
 /**
- * Integration test + benchmark: OAAX runtime with YOLOv8n / YOLOv11n OpenVINO IR models.
+ * Integration benchmark: OAAX v2 runtime with YOLOv8n / YOLOv11n models.
  *
- * Exercises the async queue architecture using dedicated producer and consumer threads:
- *   - Producer thread: calls send_input() for each request and records send timestamps.
- *   - Consumer thread: calls receive_output() as results arrive and computes per-request
- *     latency from the matching send timestamp (FIFO ordering is guaranteed by the runtime).
+ * Uses dedicated producer/consumer threads to exercise the async queue.
  *
  * Usage:
- *   ./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--batch N] [--perf-hint latency|throughput]
- * Defaults: device=CPU, runs=30, warmup=5, batch=1
- * Note: the model must be compiled for the requested batch size.
+ *   ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
+ *               [--perf-hint latency|throughput] [--input-dtype f32|u8|f16]
+ *               [--in-flight N] [--imgsz N] [--queue-limit-test]
+ * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=5, imgsz=640
  */
 
 #include <algorithm>
@@ -23,57 +21,95 @@
 #include <thread>
 #include <vector>
 
-#include "../include/runtime_core.hpp"
-#include "../include/tensors_struct.h"
+#include "oaax_runtime.h"
 
-static const size_t YOLO_CHANNELS = 3;
-static const size_t YOLO_HEIGHT = 640;
-static const size_t YOLO_WIDTH = 640;
-static const size_t YOLO_OUT_CH = 84;
-static const size_t YOLO_ANCHORS = 8400;
+static const int YOLO_CHANNELS = 3;
+static const int YOLO_OUT_CH = 84;  // 4 bbox + 80 COCO classes, resolution-independent
+
+static size_t dtype_byte_size(TensorElementType dtype) {
+    switch (dtype) {
+        case DATA_TYPE_UINT8:
+            return 1;
+        case DATA_TYPE_FLOAT16:
+            return 2;
+        default:
+            return 4;  // f32
+    }
+}
+
+static TensorElementType parse_input_dtype(const char *s) {
+    if (strcmp(s, "u8") == 0 || strcmp(s, "uint8") == 0) return DATA_TYPE_UINT8;
+    if (strcmp(s, "f16") == 0 || strcmp(s, "float16") == 0) return DATA_TYPE_FLOAT16;
+    return DATA_TYPE_FLOAT;
+}
 
 using Clock = std::chrono::steady_clock;
 using Ms = std::chrono::duration<double, std::milli>;
 
-#define CHECK(expr, msg)                               \
-    do {                                               \
-        if (!(expr)) {                                 \
-            std::cerr << "FAIL: " << msg << std::endl; \
-            runtime_destruction();                     \
-            return 1;                                  \
-        }                                              \
+#define CHECK(expr, msg)                                 \
+    do {                                                 \
+        if (!(expr)) {                                   \
+            std::cerr << "FAIL: " << (msg) << std::endl; \
+            runtime_cleanup();                           \
+            return 1;                                    \
+        }                                                \
     } while (0)
 
-static tensors_struct *make_yolo_input(size_t batch) {
-    tensors_struct *ts = allocate_tensors_struct(1);
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+static void free_tensors(Tensors *t) {
+    if (!t) return;
+    for (int i = 0; i < t->num_tensors; ++i) {
+        free(t->tensors[i].name);
+        free(t->tensors[i].shape);
+        free(t->tensors[i].data);
+    }
+    free(t->tensors);
+    free(t);
+}
+
+static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dtype, int imgsz,
+                                const char *input_name = "images") {
+    Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
     if (!ts) return nullptr;
-
-    ts->names[0] = strdup("images");
-    ts->ranks[0] = 4;
-    ts->shapes[0] = (size_t *)malloc(4 * sizeof(size_t));
-    ts->shapes[0][0] = batch;
-    ts->shapes[0][1] = YOLO_CHANNELS;
-    ts->shapes[0][2] = YOLO_HEIGHT;
-    ts->shapes[0][3] = YOLO_WIDTH;
-    ts->data_types[0] = DATA_TYPE_FLOAT;
-
-    size_t n_bytes = batch * YOLO_CHANNELS * YOLO_HEIGHT * YOLO_WIDTH * sizeof(float);
-    ts->data[0] = malloc(n_bytes);
-    if (!ts->data[0]) {
-        deep_free_tensors_struct(ts);
+    ts->id = request_id;
+    ts->num_tensors = 1;
+    ts->tensors = (TensorDescriptor *)malloc(sizeof(TensorDescriptor));
+    if (!ts->tensors) {
+        free(ts);
         return nullptr;
     }
-    memset(ts->data[0], 0, n_bytes);
+
+    TensorDescriptor &td = ts->tensors[0];
+    td.name = strdup(input_name);
+    td.data_type = dtype;
+    td.rank = 4;
+    td.shape = (int *)malloc(4 * sizeof(int));
+    td.shape[0] = batch;
+    td.shape[1] = YOLO_CHANNELS;
+    td.shape[2] = imgsz;
+    td.shape[3] = imgsz;
+    size_t n_bytes = (size_t)batch * YOLO_CHANNELS * imgsz * imgsz * dtype_byte_size(dtype);
+    td.data_size = n_bytes;
+    td.data = calloc(1, n_bytes);
+    if (!td.data) {
+        free(td.shape);
+        free(td.name);
+        free(ts->tensors);
+        free(ts);
+        return nullptr;
+    }
     return ts;
 }
 
-static bool validate_output(const tensors_struct *out, size_t batch) {
+static bool validate_output(const Tensors *out, int batch) {
     if (!out || out->num_tensors != 1) return false;
-    if (out->ranks[0] != 3) return false;
-    if (out->shapes[0][0] != batch) return false;
-    if (out->shapes[0][1] != YOLO_OUT_CH) return false;
-    if (out->shapes[0][2] != YOLO_ANCHORS) return false;
-    if (out->data_types[0] != DATA_TYPE_FLOAT) return false;
+    const TensorDescriptor &td = out->tensors[0];
+    if (td.rank != 3) return false;
+    if (td.shape[0] != batch) return false;
+    if (td.shape[1] != YOLO_OUT_CH) return false;
+    if (td.shape[2] <= 0) return false;  // anchors vary by input resolution
+    if (td.data_type != DATA_TYPE_FLOAT) return false;
     return true;
 }
 
@@ -84,38 +120,33 @@ static double percentile(std::vector<double> v, double p) {
 }
 
 /**
- * Run n inferences using separate producer and consumer threads.
- *
- * The producer is paced by an in_flight counter so it never queues more than
- * max_in_flight requests ahead of the consumer.  With max_in_flight=1 (the
- * default), the producer sends the next input only after the consumer has
- * received the previous output, giving true per-request latency without queue
- * build-up.  Increasing max_in_flight exercises the async queue depth.
- *
- * FIFO ordering in the runtime queue ensures output i matches input i.
+ * Run n inferences using separate producer/consumer threads.
+ * max_in_flight controls pipeline depth.
  * Returns per-request latencies (ms), or empty on failure.
  */
-static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send_times, bool validate_first,
-                                     size_t batch, int max_in_flight = 1) {
+static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send_times, bool validate_first, int batch,
+                                     TensorElementType dtype, int imgsz, int max_in_flight = 1,
+                                     const char *input_name = "images") {
     std::vector<double> latencies(n);
     std::atomic<bool> ok{true};
     std::atomic<int> in_flight{0};
 
     std::thread producer([&]() {
         for (int i = 0; i < n; ++i) {
-            // Wait until there is room in the pipeline.
             while (in_flight.load() >= max_in_flight) {
                 if (!ok) return;
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
-            tensors_struct *input = make_yolo_input(batch);
+            Tensors *input = make_yolo_input(batch, i, dtype, imgsz, input_name);
             if (!input) {
                 ok = false;
                 return;
             }
             send_times[i] = Clock::now();
             in_flight++;
-            if (send_input(input) != 0) {
+            if (runtime_enqueue_input(0, input) != RUNTIME_STATUS_SUCCESS) {
+                // On failure caller must free (runtime didn't take ownership)
+                free_tensors(input);
                 ok = false;
                 return;
             }
@@ -124,32 +155,42 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
 
     std::thread consumer([&]() {
         for (int i = 0; i < n; ++i) {
-            tensors_struct *output = nullptr;
-            while (receive_output(&output) != 0) {
+            int model_id = -1;
+            Tensors *output = nullptr;
+            RuntimeStatus st;
+            do {
                 if (!ok) return;
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                st = runtime_retrieve_output(&model_id, &output, 1000);
+            } while (st == RUNTIME_STATUS_NO_OUTPUT_AVAILABLE);
+
+            if (st != RUNTIME_STATUS_SUCCESS) {
+                ok = false;
+                return;
             }
-            latencies[i] = Ms(Clock::now() - send_times[i]).count();
+
+            latencies[output->id] = Ms(Clock::now() - send_times[output->id]).count();
             in_flight--;
 
             if (validate_first && i == 0 && !validate_output(output, batch)) {
-                std::cerr << "FAIL: unexpected output shape, type, or all-zero data" << std::endl;
+                std::cerr << "FAIL: unexpected output shape or type" << std::endl;
                 ok = false;
             }
-            runtime_return_output(output);
+            free_tensors(output);
         }
     });
 
     producer.join();
     consumer.join();
-
     return ok ? latencies : std::vector<double>{};
 }
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0]
-                  << " <model.xml> [device] [--runs N] [--warmup N] [--batch N] [--perf-hint latency|throughput]"
+                  << " <model.zip> [device] [--runs N] [--warmup N] [--batch N]"
+                     " [--perf-hint latency|throughput] [--nireq N]"
                   << std::endl;
         return 1;
     }
@@ -157,9 +198,17 @@ int main(int argc, char **argv) {
     const char *model_path = argv[1];
     const char *device = "CPU";
     const char *perf_hint = "latency";
+    const char *input_dtype_str = "f32";
+    const char *input_name = "images";
     int runs = 30;
     int warmup = 5;
-    size_t batch = 1;
+    int batch = 1;
+    int nireq = 0;  // 0 = use runtime default (optimal)
+    int in_flight = 5;
+    int imgsz = 640;
+    int log_level = 2;  // spdlog level: 0=trace 1=debug 2=info 3=warn 4=err
+    bool test_queue_limit = false;
+    bool validate_output_shape = true;
 
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc)
@@ -167,81 +216,143 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--warmup") == 0 && i + 1 < argc)
             warmup = atoi(argv[++i]);
         else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc)
-            batch = (size_t)atoi(argv[++i]);
+            batch = atoi(argv[++i]);
         else if (strcmp(argv[i], "--perf-hint") == 0 && i + 1 < argc)
             perf_hint = argv[++i];
+        else if (strcmp(argv[i], "--nireq") == 0 && i + 1 < argc)
+            nireq = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--input-dtype") == 0 && i + 1 < argc)
+            input_dtype_str = argv[++i];
+        else if (strcmp(argv[i], "--in-flight") == 0 && i + 1 < argc)
+            in_flight = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--imgsz") == 0 && i + 1 < argc)
+            imgsz = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--input-name") == 0 && i + 1 < argc)
+            input_name = argv[++i];
+        else if (strcmp(argv[i], "--log-level") == 0 && i + 1 < argc)
+            log_level = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--no-validate") == 0)
+            validate_output_shape = false;
+        else if (strcmp(argv[i], "--queue-limit-test") == 0)
+            test_queue_limit = true;
         else
             device = argv[i];
     }
+    TensorElementType input_dtype = parse_input_dtype(input_dtype_str);
 
-    std::cout << "=== OAAX YOLO Benchmark ===" << std::endl;
+    std::cout << "=== OAAX YOLO Benchmark (v2) ===" << std::endl;
     std::cout << "Model     : " << model_path << std::endl;
     std::cout << "Device    : " << device << std::endl;
     std::cout << "Perf hint : " << perf_hint << std::endl;
     std::cout << "Batch     : " << batch << std::endl;
+    std::cout << "nireq     : " << (nireq > 0 ? std::to_string(nireq) : "auto") << std::endl;
+    std::cout << "Input dtype: " << input_dtype_str << std::endl;
+    std::cout << "Input name : " << input_name << std::endl;
+    std::cout << "In-flight  : " << in_flight << std::endl;
+    std::cout << "Image size : " << imgsz << "x" << imgsz << std::endl;
     std::cout << "Warmup    : " << warmup << " runs" << std::endl;
     std::cout << "Runs      : " << runs << std::endl << std::endl;
 
-    // ── 1. Initialize runtime ─────────────────────────────────────────────────
+    // ── 1. Init ───────────────────────────────────────────────────────────────
     std::cout << "[1] Initializing runtime..." << std::endl;
-    char device_key[] = "device_type";
-    char log_key[] = "log_level";
-    char log_val[] = "2";
-    char hint_key[] = "perf_hint";
-    char *keys[] = {device_key, log_key, hint_key};
-    void *values[] = {const_cast<char *>(device), log_val, const_cast<char *>(perf_hint)};
-
-    int rc = runtime_initialization_with_args(3, keys, values);
-    CHECK(rc == 0, "runtime_initialization_with_args failed (rc=" + std::to_string(rc) + ")");
-    std::cout << "  ✓ " << runtime_name() << " v" << runtime_version() << std::endl;
+    std::string nireq_str = std::to_string(nireq);
+    std::string log_level_str = std::to_string(log_level);
+    const char *init_keys[] = {"device_type", "perf_hint", "log_level", "num_requests"};
+    const char *init_vals[] = {device, perf_hint, log_level_str.c_str(), nireq_str.c_str()};
+    Config init_cfg = {4, init_keys, init_vals};
+    CHECK(runtime_init(init_cfg) == RUNTIME_STATUS_SUCCESS, "runtime_init failed");
+    std::cout << "  " << runtime_get_name() << " v" << runtime_get_version() << std::endl;
 
     // ── 2. Load model ─────────────────────────────────────────────────────────
     std::cout << "[2] Loading model..." << std::endl;
     auto tload = Clock::now();
-    rc = runtime_model_loading(model_path);
-    CHECK(rc == 0, "runtime_model_loading failed");
+    ModelConfig mc{};
+    mc.file_path = model_path;
+    mc.config = {0, nullptr, nullptr};
+    CHECK(runtime_load_models(1, &mc) == RUNTIME_STATUS_SUCCESS,
+          std::string("runtime_load_models failed: ") + (runtime_get_error() ? runtime_get_error() : ""));
     double load_ms = Ms(Clock::now() - tload).count();
-    std::cout << "  ✓ Loaded in " << load_ms << " ms" << std::endl;
+    std::cout << "  Loaded in " << load_ms << " ms" << std::endl;
 
     // ── 3. Warmup ─────────────────────────────────────────────────────────────
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;
     {
         std::vector<Clock::time_point> ts(warmup);
-        CHECK(!run_batch(warmup, ts, false, batch, 5).empty(), "warmup failed");
+        CHECK(!run_batch(warmup, ts, false, batch, input_dtype, imgsz, in_flight, input_name).empty(), "warmup failed");
     }
-    std::cout << "  ✓ Done" << std::endl;
+    std::cout << "  Done" << std::endl;
 
     // ── 4. Benchmark ──────────────────────────────────────────────────────────
-    std::cout << "[4] Benchmarking (" << runs << " runs, batch=" << batch << ", in-flight=5)..." << std::endl;
+    std::cout << "[4] Benchmarking (" << runs << " runs, batch=" << batch << ", in-flight=" << in_flight << ")..."
+              << std::endl;
     std::vector<Clock::time_point> send_times(runs);
-
     auto bench_start = Clock::now();
-    auto latencies = run_batch(runs, send_times, true, batch, 5);
+    auto latencies =
+        run_batch(runs, send_times, validate_output_shape, batch, input_dtype, imgsz, in_flight, input_name);
     double bench_ms = Ms(Clock::now() - bench_start).count();
-
     CHECK(!latencies.empty(), "benchmark failed");
 
     double avg = std::accumulate(latencies.begin(), latencies.end(), 0.0) / latencies.size();
     double mn = *std::min_element(latencies.begin(), latencies.end());
     double mx = *std::max_element(latencies.begin(), latencies.end());
     double p95 = percentile(latencies, 95.0);
-    // Throughput in images/s: each inference processes `batch` images.
     double fps = runs * (double)batch * 1000.0 / bench_ms;
 
-    std::cout << std::endl;
-    std::cout << "=== Results ===" << std::endl;
+    std::cout << "\n=== Results ===" << std::endl;
     std::cout << "  Load time  : " << load_ms << " ms" << std::endl;
-    std::cout << "  Avg latency: " << avg << " ms  (per inference, batch=" << batch << ")" << std::endl;
+    std::cout << "  Avg latency: " << avg << " ms" << std::endl;
     std::cout << "  Min latency: " << mn << " ms" << std::endl;
     std::cout << "  Max latency: " << mx << " ms" << std::endl;
     std::cout << "  p95 latency: " << p95 << " ms" << std::endl;
     std::cout << "  Throughput : " << fps << " img/s" << std::endl;
 
-    // ── 5. Destroy runtime ────────────────────────────────────────────────────
-    std::cout << std::endl << "[5] Destroying runtime..." << std::endl;
-    rc = runtime_destruction();
-    CHECK(rc == 0, "runtime_destruction failed");
-    std::cout << "  ✓ Done" << std::endl;
+    // ── 5. Cleanup ────────────────────────────────────────────────────────────
+    std::cout << "\n[5] Cleaning up..." << std::endl;
+    CHECK(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "runtime_cleanup failed");
+    std::cout << "  Done" << std::endl;
+
+    // ── 6. Queue limit test (optional) ────────────────────────────────────────
+    // Verifies that max_queue_size rejects inputs when queues are at capacity.
+    // Uses 1 infer slot and a limit of 3: after 4 accepted enqueues (1 in-slot +
+    // 3 in input_queue) every further enqueue must be rejected.
+    if (test_queue_limit) {
+        std::cout << "\n[6] Queue limit test (max_queue_size=3, num_requests=1)..." << std::endl;
+
+        const int QUEUE_LIMIT = 3;
+        const int FLOOD = 20;
+        std::string ql_str = std::to_string(QUEUE_LIMIT);
+        const char *ql_keys[] = {"device_type", "log_level", "num_requests", "max_queue_size", "input_dtype"};
+        const char *ql_vals[] = {device, "2", "1", ql_str.c_str(), input_dtype_str};
+        Config ql_cfg = {5, ql_keys, ql_vals};
+        CHECK(runtime_init(ql_cfg) == RUNTIME_STATUS_SUCCESS, "queue-limit re-init failed");
+
+        ModelConfig ql_mc{};
+        ql_mc.file_path = model_path;
+        ql_mc.config = {0, nullptr, nullptr};
+        CHECK(runtime_load_models(1, &ql_mc) == RUNTIME_STATUS_SUCCESS, "queue-limit model load failed");
+
+        int rejected = 0;
+        for (int i = 0; i < FLOOD; ++i) {
+            Tensors *inp = make_yolo_input(1, i, input_dtype, imgsz);
+            CHECK(inp != nullptr, "make_yolo_input returned null");
+            RuntimeStatus st = runtime_enqueue_input(0, inp);
+            if (st != RUNTIME_STATUS_SUCCESS) {
+                rejected++;
+                free_tensors(inp);  // runtime didn't take ownership on failure
+            }
+        }
+
+        CHECK(rejected > 0, "expected at least one rejection with max_queue_size=3, got none");
+        std::cout << "  Rejected " << rejected << "/" << FLOOD << " inputs as expected" << std::endl;
+
+        // Drain remaining in-flight outputs
+        int mid = -1;
+        Tensors *out = nullptr;
+        while (runtime_retrieve_output(&mid, &out, 100) == RUNTIME_STATUS_SUCCESS) free_tensors(out);
+
+        CHECK(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "queue-limit cleanup failed");
+        std::cout << "  PASS: max_queue_size enforced correctly" << std::endl;
+    }
 
     return 0;
 }

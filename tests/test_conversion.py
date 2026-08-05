@@ -148,8 +148,9 @@ class TestRealModels:
         # Get input shape from model info
         input_shape = real_model["info"]["input_shape"]
 
-        # Create dummy input
-        input_data = np.random.randn(*input_shape).astype(np.float32)
+        # Create dummy input — use the model's actual input element type (may be f16 after auto-bake)
+        input_dtype = compiled_model.input(0).element_type.to_dtype()
+        input_data = np.random.randn(*input_shape).astype(input_dtype)
 
         # Run inference
         infer_request = compiled_model.create_infer_request()
@@ -463,6 +464,307 @@ class TestErrorHandling:
             log_messages = [msg.message for msg in logs.messages]
             assert any("Multiple ONNX files" in msg or "Warning" in msg for msg in log_messages)
             assert onnx_path is not None
+
+
+class TestBatchSize:
+    """Tests for the batch_size conversion parameter"""
+
+    BATCH_SIZE = 4
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp = tempfile.mkdtemp()
+        yield temp
+        shutil.rmtree(temp)
+
+    @pytest.fixture
+    def mobilenet_model(self):
+        models_dir = Path(__file__).parent / "test_models"
+        models_dir.mkdir(exist_ok=True)
+        model_path = download_model("mobilenetv2", str(models_dir))
+        if not Path(model_path).exists():
+            pytest.skip("MobileNetV2 not available")
+        return model_path
+
+    @pytest.fixture
+    def yolov8n_model(self):
+        models_dir = Path(__file__).parent / "test_models"
+        model_path = models_dir / "yolov8n.onnx"
+        if not model_path.exists():
+            pytest.skip("yolov8n.onnx not available")
+        return str(model_path)
+
+    def test_config_batch_size_default(self):
+        """Default batch_size is 1"""
+        config = OptimizationConfig.from_default()
+        assert config.get_batch_size() == 1
+
+    def test_config_batch_size_custom(self):
+        """batch_size is read from config dict"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        assert config.get_batch_size() == self.BATCH_SIZE
+
+    def test_config_batch_size_invalid(self):
+        """Zero and negative batch_size raise ValueError"""
+        for bad in (0, -1, -4):
+            with pytest.raises(ValueError, match="batch_size"):
+                OptimizationConfig({"advanced": {"batch_size": bad}})
+
+    def test_batch4_input_shape(self, mobilenet_model, temp_dir):
+        """Converted model has input batch dim == 4"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert (
+            model.inputs[0].shape[0] == self.BATCH_SIZE
+        ), f"Expected batch dim {self.BATCH_SIZE}, got {model.inputs[0].shape[0]}"
+
+    def test_batch4_output_shape(self, mobilenet_model, temp_dir):
+        """Converted model output also has batch dim == 4"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert model.outputs[0].shape[0] == self.BATCH_SIZE
+
+    def test_batch4_inference(self, mobilenet_model, temp_dir):
+        """Model converted with batch=4 runs inference on a batch of 4 images"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_model, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        core = ov.Core()
+        model = core.read_model(str(next(extract_dir.glob("*.xml"))))
+        compiled = core.compile_model(model, "CPU")
+
+        input_data = np.random.randn(self.BATCH_SIZE, 3, 224, 224).astype(np.float32)
+        result = compiled(input_data)[compiled.output(0)]
+
+        assert result.shape[0] == self.BATCH_SIZE
+        assert result.shape[1] == 1000  # ImageNet classes
+
+    def test_batch4_bundle_with_config(self, mobilenet_model, temp_dir):
+        """batch_size specified via config.json inside the zip bundle"""
+        bundle_path = Path(temp_dir) / "bundle.zip"
+        with zipfile.ZipFile(bundle_path, "w") as z:
+            z.write(mobilenet_model, arcname="model.onnx")
+            z.writestr("config.json", json.dumps({"advanced": {"batch_size": self.BATCH_SIZE}}))
+
+        logs = Logs()
+        with tempfile.TemporaryDirectory() as extract_dir:
+            onnx_path, config_path, _ = extract_input_bundle(str(bundle_path), extract_dir, logs)
+            config = OptimizationConfig.from_file(config_path)
+            assert config.get_batch_size() == self.BATCH_SIZE
+
+            zip_path = convert_to_ir(onnx_path, temp_dir, logs, config)
+
+        extract_dir2 = Path(temp_dir) / "ir"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir2)
+
+        model = ov.Core().read_model(str(next(extract_dir2.glob("*.xml"))))
+        assert model.inputs[0].shape[0] == self.BATCH_SIZE
+
+    def test_hardcoded_batch_error_message(self, yolov8n_model, temp_dir):
+        """YOLO models with hardcoded batch=1 raise a clear error"""
+        config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
+        logs = Logs()
+        with pytest.raises(RuntimeError, match="batch_size=4"):
+            convert_to_ir(yolov8n_model, temp_dir, logs, config)
+
+
+class TestPreprocessingConfig:
+    """Unit tests for the preprocessing section of OptimizationConfig."""
+
+    def test_defaults_are_none(self):
+        config = OptimizationConfig.from_default()
+        assert config.get_preprocessing_input_dtype() is None
+        assert config.get_mean_values() is None
+        assert config.get_scale_values() is None
+
+    def test_has_preprocessing_false_by_default(self):
+        assert OptimizationConfig.from_default().has_preprocessing() is False
+
+    def test_has_preprocessing_true_when_any_field_set(self):
+        assert OptimizationConfig({"preprocessing": {"input_dtype": "u8"}}).has_preprocessing()
+        assert OptimizationConfig({"preprocessing": {"mean_values": [0.0, 0.0, 0.0]}}).has_preprocessing()
+        assert OptimizationConfig({"preprocessing": {"scale_values": [255.0, 255.0, 255.0]}}).has_preprocessing()
+
+    def test_valid_input_dtypes(self):
+        for dtype in ("u8", "f16", "f32"):
+            cfg = OptimizationConfig({"preprocessing": {"input_dtype": dtype}})
+            assert cfg.get_preprocessing_input_dtype() == dtype
+
+    def test_invalid_input_dtype_raises(self):
+        with pytest.raises(ValueError, match="input_dtype"):
+            OptimizationConfig({"preprocessing": {"input_dtype": "int32"}})
+
+    def test_valid_mean_and_scale(self):
+        cfg = OptimizationConfig(
+            {"preprocessing": {"mean_values": [123.675, 116.28, 103.53], "scale_values": [255.0, 255.0, 255.0]}}
+        )
+        assert cfg.get_mean_values() == [123.675, 116.28, 103.53]
+        assert cfg.get_scale_values() == [255.0, 255.0, 255.0]
+
+    def test_invalid_mean_not_a_list_raises(self):
+        with pytest.raises(ValueError, match="mean_values"):
+            OptimizationConfig({"preprocessing": {"mean_values": 123.0}})
+
+    def test_invalid_scale_non_numeric_raises(self):
+        with pytest.raises(ValueError, match="scale_values"):
+            OptimizationConfig({"preprocessing": {"scale_values": ["a", "b", "c"]}})
+
+    def test_config_json_roundtrip(self, tmp_path):
+        data = {"preprocessing": {"input_dtype": "u8", "scale_values": [255.0, 255.0, 255.0]}}
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps(data))
+        cfg = OptimizationConfig.from_file(str(cfg_file))
+        assert cfg.get_preprocessing_input_dtype() == "u8"
+        assert cfg.get_scale_values() == [255.0, 255.0, 255.0]
+
+
+class TestPreprocessingConversion:
+    """Functional tests verifying that preprocessing is correctly baked into the IR."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp = tempfile.mkdtemp()
+        yield temp
+        shutil.rmtree(temp)
+
+    @pytest.fixture
+    def mobilenet_path(self):
+        models_dir = Path(__file__).parent / "test_models"
+        models_dir.mkdir(exist_ok=True)
+        model_path = download_model("mobilenetv2", str(models_dir))
+        if not Path(model_path).exists():
+            pytest.skip("MobileNetV2 not available")
+        return model_path
+
+    def _load_compiled(self, zip_path: str) -> ov.CompiledModel:
+        extract_dir = Path(zip_path).parent / "ir"
+        extract_dir.mkdir(exist_ok=True)
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        return ov.Core().compile_model(model, "CPU"), model
+
+    def test_u8_input_dtype_baked_into_ir(self, mobilenet_path, temp_dir):
+        """After conversion with input_dtype=u8, the IR input boundary is u8."""
+        config = OptimizationConfig({"preprocessing": {"input_dtype": "u8"}})
+        logs = Logs()
+        zip_path = convert_to_ir(mobilenet_path, temp_dir, logs, config)
+
+        extract_dir = Path(temp_dir) / "ir_u8"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert model.inputs[0].get_element_type() == ov.Type.u8, "Input type should be u8"
+
+    def test_no_preprocessing_input_type_unchanged(self, mobilenet_path, temp_dir):
+        """Without preprocessing config and without FP16 compression, the IR keeps its original f32 input type."""
+        logs = Logs()
+        no_fp16 = {"optimization": {"fp16_compression": False}}
+        zip_path = convert_to_ir(mobilenet_path, temp_dir, logs, OptimizationConfig(no_fp16))
+
+        extract_dir = Path(temp_dir) / "ir_f32"
+        with zipfile.ZipFile(zip_path) as z:
+            z.extractall(extract_dir)
+
+        model = ov.Core().read_model(str(next(extract_dir.glob("*.xml"))))
+        assert model.inputs[0].get_element_type() == ov.Type.f32
+
+    def test_scale_normalization_matches_manual(self, mobilenet_path, temp_dir):
+        """Model with baked-in ÷255 and u8 input produces the same output as the
+        baseline model fed manually-normalized f32 inputs."""
+        np.random.seed(42)
+        pixels_u8 = np.random.randint(0, 256, (1, 3, 224, 224), dtype=np.uint8)
+        pixels_f32 = pixels_u8.astype(np.float32) / 255.0
+
+        # Disable FP16 compression so precision differences don't mask PPP correctness
+        no_fp16 = {"optimization": {"fp16_compression": False}}
+        logs = Logs()
+
+        baseline_zip = convert_to_ir(mobilenet_path, Path(temp_dir) / "baseline", logs, OptimizationConfig(no_fp16))
+        extract_dir = Path(temp_dir) / "baseline_ir"
+        with zipfile.ZipFile(baseline_zip) as z:
+            z.extractall(extract_dir)
+        baseline_model = ov.Core().compile_model(ov.Core().read_model(str(next(extract_dir.glob("*.xml")))), "CPU")
+        ref_output = baseline_model(pixels_f32)[baseline_model.output(0)]
+
+        config = OptimizationConfig(
+            {**no_fp16, "preprocessing": {"input_dtype": "u8", "scale_values": [255.0, 255.0, 255.0]}}
+        )
+        pp_zip = convert_to_ir(mobilenet_path, Path(temp_dir) / "pp", logs, config)
+        extract_dir2 = Path(temp_dir) / "pp_ir"
+        with zipfile.ZipFile(pp_zip) as z:
+            z.extractall(extract_dir2)
+        pp_model = ov.Core().compile_model(ov.Core().read_model(str(next(extract_dir2.glob("*.xml")))), "CPU")
+        pp_output = pp_model(pixels_u8)[pp_model.output(0)]
+
+        np.testing.assert_allclose(
+            ref_output, pp_output, rtol=1e-4, atol=1e-4, err_msg="Baked-in scale normalisation should match manual ÷255"
+        )
+
+    def test_mean_and_scale_normalization_matches_manual(self, mobilenet_path, temp_dir):
+        """Model with baked-in mean + scale produces the same output as the baseline
+        model fed inputs that were manually mean-subtracted and scaled."""
+        np.random.seed(7)
+        MEAN = [123.675, 116.28, 103.53]
+        SCALE = [58.395, 57.12, 57.375]
+
+        pixels_u8 = np.random.randint(0, 256, (1, 3, 224, 224), dtype=np.uint8)
+        pixels_f32 = pixels_u8.astype(np.float32)
+        for c in range(3):
+            pixels_f32[0, c] = (pixels_f32[0, c] - MEAN[c]) / SCALE[c]
+
+        no_fp16 = {"optimization": {"fp16_compression": False}}
+        logs = Logs()
+
+        baseline_zip = convert_to_ir(mobilenet_path, Path(temp_dir) / "baseline_ms", logs, OptimizationConfig(no_fp16))
+        extract_dir = Path(temp_dir) / "baseline_ms_ir"
+        with zipfile.ZipFile(baseline_zip) as z:
+            z.extractall(extract_dir)
+        baseline_model = ov.Core().compile_model(ov.Core().read_model(str(next(extract_dir.glob("*.xml")))), "CPU")
+        ref_output = baseline_model(pixels_f32)[baseline_model.output(0)]
+
+        config = OptimizationConfig(
+            {**no_fp16, "preprocessing": {"input_dtype": "u8", "mean_values": MEAN, "scale_values": SCALE}}
+        )
+        pp_zip = convert_to_ir(mobilenet_path, Path(temp_dir) / "pp_ms", logs, config)
+        extract_dir2 = Path(temp_dir) / "pp_ms_ir"
+        with zipfile.ZipFile(pp_zip) as z:
+            z.extractall(extract_dir2)
+        pp_model = ov.Core().compile_model(ov.Core().read_model(str(next(extract_dir2.glob("*.xml")))), "CPU")
+        pp_output = pp_model(pixels_u8)[pp_model.output(0)]
+
+        np.testing.assert_allclose(
+            ref_output, pp_output, rtol=1e-4, atol=1e-4, err_msg="Baked-in mean+scale should match manual normalization"
+        )
+
+    def test_log_records_preprocessing(self, mobilenet_path, temp_dir):
+        """Conversion logs should mention the baked-in preprocessing."""
+        config = OptimizationConfig({"preprocessing": {"input_dtype": "u8", "scale_values": [255.0, 255.0, 255.0]}})
+        logs = Logs()
+        convert_to_ir(mobilenet_path, temp_dir, logs, config)
+        logs_str = str(logs).lower()
+        assert "preprocessing" in logs_str
 
 
 class TestInvalidConfigurations:

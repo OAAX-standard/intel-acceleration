@@ -1,8 +1,8 @@
 # Intel Acceleration Project Status
 
 **Project:** OAAX Implementation for Intel Hardware
-**Version:** 1.3.2
-**Last Updated:** 2026-04-15
+**Version:** 2.0.0
+**Last Updated:** 2026-04-19
 
 ---
 
@@ -16,7 +16,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Current Status
 
-**Last Updated:** 2026-04-15 (v1.3.2 pool exhaustion fix + receive_output backpressure)
+**Last Updated:** 2026-04-19 (v2.0.0 OAAX v2 interface implementation)
 
 ### ✅ Completed Phases
 
@@ -121,7 +121,24 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 
 ## Next Steps (Phase 3+)
 
-### Phase 3: Production Hardening (IN PROGRESS)
+### Phase 3: Production Hardening (COMPLETED)
+
+#### v2.0.0 — OAAX v2 Interface (2026-04-19)
+- ✅ New public header `oaax_runtime.h`: `RuntimeStatus` enum (18 codes), `TensorElementType` (27 types), `TensorDescriptor` (AoS layout), `Tensors` with request `id`, `Config`, `ModelConfig`
+- ✅ `runtime_init` / `runtime_cleanup` (idempotent) replace `runtime_initialization` / `runtime_destruction`
+- ✅ `runtime_load_models`: N models in one call, per-model config (device_type/perf_hint/cache_dir inherit from global)
+- ✅ `runtime_enqueue_input(model_id, Tensors*)`: model routing; runtime owns input on success
+- ✅ `runtime_retrieve_output(int *model_id, Tensors**, timeout_ms)`: global output queue; blocking with `sem_timedwait` (Linux) / `WaitForSingleObject` (Windows); `Tensors.id` echoed for request correlation
+- ✅ `runtime_get_error()` / `runtime_get_info()` (JSON diagnostics)
+- ✅ Standard malloc/free per output (pool removed per v2 spec)
+- ✅ Per-model manager thread + global output semaphore
+- ✅ Type mapping expanded: `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`, `DATA_TYPE_INT4`, `DATA_TYPE_UINT4`
+- ✅ Tests updated to v2 API; stage2.py output format unchanged
+- ✅ All 79 Python tests + 9 runtime benchmarks passing
+
+---
+
+### Phase 3: Production Hardening (PREVIOUSLY IN PROGRESS)
 **Target:** Q2 2026
 **Priority:** High
 **Status:** Partially complete
@@ -145,7 +162,7 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
 - ✅ Per-slot state struct + single `set_callback()` registration per slot (no std::function heap alloc per inference)
 - ✅ Memory leak verification: zero RSS growth over 10,000 INT8 inferences
 - ✅ INT8/FP16 quantization accuracy test (`test_quantization_accuracy.py`; FP16 cosine ≈1.000, INT8 cosine ≈0.9998)
-- ✅ Debug-only dispatch profiler (`runtime_profiler.hpp`): per-stage timing (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) enabled via `OAAX_PROFILE=1` (auto-set for Debug builds); zero overhead in Release
+- ❌ Dispatch profiler (`OAAX_PROFILE`): removed 2026-07-12 — all profiling and time-measurement code stripped from the runtime
 - ✅ Multi-GPU auto-detection: when `device_type="GPU"` and multiple GPUs present, automatically constructs `MULTI:GPU.0,GPU.1,...` string; use `perf_hint=cumulative_throughput` for best aggregate FPS
 - ✅ Batch-size throughput sweep (`tests/benchmark_batch_sweep.py`): exports YOLO .pt → ONNX with explicit batch, converts to IR, benchmarks yolo_test + benchmark_app across batches 1/2/4/8; results cached in `tests/compiled_models/_batch_sweep/`
 - ✅ stage2.py regex fix: updated parse patterns to match `Avg latency:` / `Min latency:` / `p95 latency:` output labels from yolo_test
@@ -175,7 +192,6 @@ Provide a production-ready implementation of the OAAX standard for Intel hardwar
    - ✅ Semaphore-driven dispatch (no polling, no sleep)
    - ✅ Single callback registration per slot (no per-inference std::function alloc)
    - ✅ Multi-GPU auto-detection (MULTI plugin, `cumulative_throughput` hint)
-   - ✅ Debug-only profiler (`OAAX_PROFILE=1`); zero overhead in Release
    - ✅ Model caching across process restarts via `ov::cache_dir` (default=CWD; disable with `cache_dir=""`)
 
 4. **Packaging**
@@ -480,7 +496,12 @@ Note: `benchmark_app -d GPU` does NOT use MULTI — routes to fastest single GPU
 - **Impact:** Fixed Windows DLL bundling — `OPENVINO_BIN_DIR` was empty, causing the cmake -P script to copy nothing
 - **Status:** Fixed in CMakeLists.txt (line 30)
 
-**2026-04-12: Debug-only dispatch profiler (`OAAX_PROFILE`)**
+**2026-07-12: Profiler and time measurements removed**
+- **Decision:** Remove `runtime_profiler.hpp`, all `OAAX_PROFILE` code, and every remaining time-measurement (`elapsed_us` stopwatches, µs trace logs) from the runtime
+- **Rationale:** Profiling already answered its question (dispatch overhead <1.4% CPU / <0.3% GPU); the instrumentation was dead weight and noise
+- **Status:** Done — benchmark timing lives in the test harnesses (`yolo_test`, `benchmark_batch_sweep.py`) instead
+
+**2026-04-12: Debug-only dispatch profiler (`OAAX_PROFILE`)** *(superseded 2026-07-12: removed)*
 - **Decision:** Add `runtime_profiler.hpp` with `#ifdef OAAX_PROFILE` guards around atomic timing accumulators for all pipeline stages; enabled automatically for Debug builds via CMake
 - **Rationale:** Profiling confirmed dispatch overhead is <1.4% on CPU, <0.3% on GPU. The ~7% GPU throughput gap vs `benchmark_app` comes entirely from per-inference H2D+D2H memory transfers, not from runtime overhead
 - **Impact:** Zero overhead in Release builds (all macros expand to `((void)0)`); full pipeline breakdown available in Debug

@@ -33,7 +33,7 @@ class CalibrationDataLoader:
 
     SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
-    def __init__(self, calibration_dir: str, input_shape: list[int] | None = None):
+    def __init__(self, calibration_dir: str, input_shape: list[int] | None = None, input_dtype: str = "f32"):
         """
         Initialize calibration data loader
 
@@ -41,9 +41,13 @@ class CalibrationDataLoader:
             calibration_dir: Directory containing calibration images
             input_shape: Expected input shape [batch, channels, height, width]
                         If None, will infer from first image
+            input_dtype: Element type expected by the model boundary ("f32" or "u8").
+                        When "u8", images are returned as raw uint8 [0,255] — the model
+                        is responsible for normalization (e.g. via baked-in PPP).
         """
         self.calibration_dir = Path(calibration_dir)
         self.input_shape = input_shape
+        self.input_dtype = input_dtype
         self.image_files = self._find_images()
 
         if not self.image_files:
@@ -83,17 +87,22 @@ class CalibrationDataLoader:
         # Resize image
         img = img.resize((target_width, target_height), Image.Resampling.BILINEAR)
 
-        # Convert to numpy array
-        img_array = np.array(img, dtype=np.float32)
+        # Convert HWC to CHW; keep as u8 or normalise to [0,1] f32
+        # depending on what the model's input boundary expects.
+        if self.input_dtype == "u8":
+            img_array = np.array(img, dtype=np.uint8)
+        else:
+            img_array = np.array(img, dtype=np.float32) / 255.0
 
-        # Normalize to [0, 1]
-        img_array = img_array / 255.0
-
-        # Convert HWC to CHW (Height, Width, Channels -> Channels, Height, Width)
         img_array = np.transpose(img_array, (2, 0, 1))
 
-        # Add batch dimension
+        # Add batch dimension; tile to match model's fixed batch size if > 1
         img_array = np.expand_dims(img_array, axis=0)
+        batch_size = (
+            self.input_shape[0] if self.input_shape and len(self.input_shape) == 4 and self.input_shape[0] > 1 else 1
+        )
+        if batch_size > 1:
+            img_array = np.repeat(img_array, batch_size, axis=0)
 
         return img_array
 
@@ -123,7 +132,13 @@ class CalibrationDataLoader:
 
 
 def quantize_model(
-    model: ov.Model, calibration_dir: str, preset: str = "mixed", subset_size: int = 300, logs=None
+    model: ov.Model,
+    calibration_dir: str,
+    preset: str = "mixed",
+    subset_size: int = 300,
+    logs=None,
+    input_dtype: str = "f32",
+    target_device: str = "any",
 ) -> ov.Model:
     """
     Quantize OpenVINO model to INT8 using NNCF
@@ -134,6 +149,10 @@ def quantize_model(
         preset: NNCF quantization preset ('performance', 'mixed', or 'accuracy')
         subset_size: Number of calibration samples to use
         logs: Logger instance for tracking progress
+        input_dtype: Element type expected by the model boundary
+        target_device: Deployment target ('any', 'cpu', 'gpu', 'npu'). When 'npu',
+            preset is forced to 'performance' and attention/DFL subgraphs are kept
+            in FP16 via IgnoredScope to avoid NPU requantization overhead.
 
     Returns:
         Quantized OpenVINO model
@@ -151,7 +170,12 @@ def quantize_model(
     if logs:
         logs.add_message(
             "Starting INT8 quantization",
-            {"Preset": preset, "Calibration directory": calibration_dir, "Subset size": subset_size},
+            {
+                "Preset": preset,
+                "Target device": target_device,
+                "Calibration directory": calibration_dir,
+                "Subset size": subset_size,
+            },
         )
 
     # Get model input shape
@@ -163,7 +187,7 @@ def quantize_model(
 
     # Load calibration data
     try:
-        data_loader = CalibrationDataLoader(calibration_dir, input_shape)
+        data_loader = CalibrationDataLoader(calibration_dir, input_shape, input_dtype)
         if logs:
             logs.add_message(
                 "Calibration data loaded",
@@ -177,13 +201,41 @@ def quantize_model(
     # Create calibration dataset
     calibration_dataset = nncf.Dataset(data_loader.get_data_generator(subset_size))
 
-    # Map preset to NNCF preset
     preset_mapping = {
         "performance": nncf.QuantizationPreset.PERFORMANCE,
         "mixed": nncf.QuantizationPreset.MIXED,
     }
+    device_mapping = {
+        "npu": nncf.TargetDevice.NPU,
+        "cpu": nncf.TargetDevice.CPU,
+        "gpu": nncf.TargetDevice.GPU,
+        "any": nncf.TargetDevice.ANY,
+    }
+
+    nncf_device = device_mapping.get(target_device.lower(), nncf.TargetDevice.ANY)
+
+    # NPU requires symmetric weights (PERFORMANCE preset) and cannot fuse
+    # FakeQuantize boundaries around attention/DFL ops — keep those in FP16.
+    is_npu = target_device.lower() == "npu"
+    if is_npu and preset != "performance":
+        if logs:
+            logs.add_message(
+                f"NPU target: overriding preset '{preset}' → 'performance' "
+                "(symmetric weights required for VPUX full fusion)"
+            )
+        preset = "performance"
 
     nncf_preset = preset_mapping.get(preset, nncf.QuantizationPreset.MIXED)
+
+    ignored_scope = (
+        nncf.IgnoredScope(
+            patterns=[r".*/attn/.*", r".*/dfl/.*"],
+            types=["MatMul"],
+            validate=False,
+        )
+        if is_npu
+        else None
+    )
 
     if logs:
         logs.add_message("Running NNCF quantization (this may take several minutes)")
@@ -194,7 +246,9 @@ def quantize_model(
             model,
             calibration_dataset,
             preset=nncf_preset,
-            # Additional settings for better quality
+            target_device=nncf_device,
+            ignored_scope=ignored_scope,
+            fast_bias_correction=True,
             model_type=nncf.ModelType.TRANSFORMER if "bert" in str(model.get_friendly_name()).lower() else None,
         )
 

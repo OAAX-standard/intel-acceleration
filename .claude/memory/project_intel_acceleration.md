@@ -109,3 +109,23 @@ Zero overhead in Release builds.
 
 Uses `max_in_flight=5` hardcoded. Calls `runtime_return_output()` (not `deep_free_tensors_struct`) to return pool buffers.
 Average latency is skewed by queue depth with 1 infer slot — use **min latency** and **throughput** as the meaningful metrics.
+
+## CI gotchas on `oaax-v2` (2026-08-05)
+
+- `.github/workflows/build.yml` and `lint.yml` trigger only on `push`/`pull_request` targeting
+  **`main`**. A PR from `oaax-v2` into `oaax-v2` (or any non-`main` base) never runs them. In
+  practice CI only actually runs because there's a long-lived `oaax-v2` → `main` PR ("feat: OAAX v2
+  runtime interface") that re-triggers on every push to `oaax-v2` — check `gh run list --branch
+  oaax-v2` against *that* PR's checks, not your own PR's checks, to see real build/lint status.
+- `Lint Dockerfiles` (hadolint-docker) pulls `ghcr.io/hadolint/hadolint:latest` — an unpinned tag.
+  It passed on 2026-07-17 and started failing by 2026-08-05 on the exact same `conversion-toolchain/
+  Dockerfile:67` line (`DL3066`) with no local change to that file — the image drifted stricter
+  upstream. Don't assume a red Dockerfile lint means your diff broke something; check whether the
+  file you're touching is even the one it's complaining about first.
+- `integration-tests` (Stage 1 model-conversion pytest suite) was hitting the 30-minute job timeout
+  mid-run while still passing everything it had gotten through — not a hang, just insufficient
+  margin. Bumped `integration-tests` and `integration-tests-windows` (which depends on it) to 60m.
+- **`runtime_cleanup()` must stay safe to call repeatedly** (each followed by another
+  `runtime_init()`, same loaded module, no unload in between) — see
+  `.claude/memory/project_windows_runtime_fixes.md`'s 2026-08-05 entry for the `ov::shutdown()`
+  regression this caused (AIMP-1477) and why `ov::shutdown()` can never go back in there.

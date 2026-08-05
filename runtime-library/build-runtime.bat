@@ -76,9 +76,9 @@ echo Copying shared libraries to artifacts directory...
 REM Create a Windows subdirectory in artifacts if it doesn't exist
 if not exist "%ARTIFACTS_DIR%\Windows" mkdir "%ARTIFACTS_DIR%\Windows"
 
-REM Copy all DLLs and test binaries from Release to the artifacts Windows directory
+REM Copy DLLs and import lib from Release to the artifacts Windows directory
 copy Release\*.dll "%ARTIFACTS_DIR%\Windows\"
-copy Release\yolo_test.exe "%ARTIFACTS_DIR%\Windows\"
+copy Release\*.lib "%ARTIFACTS_DIR%\Windows\"
 
 REM Create a gzipped tarball of the artifacts
 tar czf "%ARTIFACTS_DIR%\runtime-library-X86_64-Windows.tar.gz" -C "%ARTIFACTS_DIR%\Windows" .

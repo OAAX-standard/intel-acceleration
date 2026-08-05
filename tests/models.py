@@ -16,6 +16,24 @@ from pathlib import Path
 
 COCO128_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip"
 
+# Maps model name → (ultralytics .pt name, export batch size, imgsz)
+_YOLO_EXPORTS = {
+    "yolov8n": ("yolov8n.pt", 1, 640),
+    "yolo11n": ("yolo11n.pt", 1, 640),
+    "yolo11s": ("yolo11s.pt", 1, 640),
+    "yolo11n_b4": ("yolo11n.pt", 4, 640),
+    "yolo11s_b4": ("yolo11s.pt", 4, 640),
+    "yolo11n_320": ("yolo11n.pt", 1, 320),
+    "yolo11s_320": ("yolo11s.pt", 1, 320),
+    "yolo11n_320_b4": ("yolo11n.pt", 4, 320),
+    "yolo11s_320_b4": ("yolo11s.pt", 4, 320),
+    "yolo26s": ("yolo26s.pt", 1, 640),
+    "yolo26s_320": ("yolo26s.pt", 1, 320),
+    "yolo26m": ("yolo26m.pt", 1, 640),
+    "yolo26m_320": ("yolo26m.pt", 1, 320),
+    "yolo26s_b4": ("yolo26s.pt", 4, 640),
+    "yolo26m_b2": ("yolo26m.pt", 2, 640),
+}
 
 TEST_MODELS = {
     "resnet18": {
@@ -61,6 +79,97 @@ TEST_MODELS = {
         "output_channels": 84,
         "output_anchors": 8400,
     },
+    "yolo11n_b4": {
+        "filename": "yolo11n_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 8400,
+    },
+    "yolo11s_b4": {
+        "filename": "yolo11s_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 8400,
+    },
+    "yolo11n_320": {
+        "filename": "yolo11n_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,  # 10x10 + 20x20 + 40x40
+    },
+    "yolo11s_320": {
+        "filename": "yolo11s_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
+    "yolo11n_320_b4": {
+        "filename": "yolo11n_320_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
+    "yolo11s_320_b4": {
+        "filename": "yolo11s_320_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 320, 320],
+        "input_name": "images",
+        "output_channels": 84,
+        "output_anchors": 2100,
+    },
+    # yolo26 models use a detection-head output [batch, 300, 6] (fixed regardless of input size)
+    "yolo26s_b4": {
+        "filename": "yolo26s_b4.onnx",
+        "task": "object_detection",
+        "input_shape": [4, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [4, 300, 6],
+    },
+    "yolo26m_b2": {
+        "filename": "yolo26m_b2.onnx",
+        "task": "object_detection",
+        "input_shape": [2, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [2, 300, 6],
+    },
+    "yolo26s": {
+        "filename": "yolo26s.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26s_320": {
+        "filename": "yolo26s_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26m": {
+        "filename": "yolo26m.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 640, 640],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
+    "yolo26m_320": {
+        "filename": "yolo26m_320.onnx",
+        "task": "object_detection",
+        "input_shape": [1, 3, 320, 320],
+        "input_name": "images",
+        "output_shape": [1, 300, 6],
+    },
 }
 
 
@@ -69,12 +178,15 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
     Export a YOLO model to ONNX using ultralytics.
 
     Args:
-        model_name: 'yolov8n' or 'yolo11n'
+        model_name: key from TEST_MODELS / _YOLO_EXPORTS (e.g. 'yolo11n', 'yolo11s_b4')
         output_dir: Directory to save the exported ONNX
 
     Returns:
         Path to the exported ONNX file
     """
+    if model_name not in _YOLO_EXPORTS:
+        raise ValueError(f"Unknown YOLO export model: {model_name}")
+
     try:
         from ultralytics import YOLO
     except ImportError as e:
@@ -89,12 +201,13 @@ def export_yolo_model(model_name: str, output_dir: str) -> str:
         print(f"✓ Model already exists: {dest}")
         return str(dest)
 
-    # Map our model names to ultralytics model IDs
-    ultralytics_name = {"yolov8n": "yolov8n.pt", "yolo11n": "yolo11n.pt", "yolo11s": "yolo11s.pt"}[model_name]
-
-    print(f"Exporting {model_name} to ONNX via ultralytics...")
+    ultralytics_name, batch, imgsz = _YOLO_EXPORTS[model_name]
+    print(f"Exporting {model_name} to ONNX via ultralytics (batch={batch}, imgsz={imgsz})...")
     model = YOLO(ultralytics_name)
-    exported = model.export(format="onnx", imgsz=640, opset=12, simplify=False)
+    export_kwargs = dict(format="onnx", imgsz=imgsz, opset=12, simplify=False)
+    if batch > 1:
+        export_kwargs["batch"] = batch
+    exported = model.export(**export_kwargs)
     shutil.move(str(exported), str(dest))
     print(f"✓ Exported to: {dest}")
     return str(dest)
@@ -127,7 +240,7 @@ def download_model(model_name: str, output_dir: str = "test_models") -> str:
         return str(model_path)
 
     # YOLO models: export via ultralytics
-    if model_name in ("yolov8n", "yolo11n", "yolo11s"):
+    if model_name in _YOLO_EXPORTS:
         return export_yolo_model(model_name, output_dir)
 
     # Classification models: download from ONNX Model Zoo

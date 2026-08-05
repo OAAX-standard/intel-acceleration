@@ -1,0 +1,21 @@
+/* Export only the OAAX C API. Everything else — including vague-linkage RTTI
+ * (typeinfo _ZTI... and typeinfo-name _ZTS... symbols) — stays local. Without
+ * this, NODELETE libraries (libstdc++, libopenvino) bind those symbols to
+ * this library during group relocation, which pins it in the process and
+ * makes dlclose() a no-op, so the runtime could never be unloaded or
+ * hot-swapped. Cross-DSO type_info comparison is name-based in GCC, so
+ * localizing RTTI here is safe. */
+{
+  global:
+    runtime_init;
+    runtime_load_models;
+    runtime_enqueue_input;
+    runtime_retrieve_output;
+    runtime_cleanup;
+    runtime_get_error;
+    runtime_get_version;
+    runtime_get_name;
+    runtime_get_info;
+  local:
+    *;
+};

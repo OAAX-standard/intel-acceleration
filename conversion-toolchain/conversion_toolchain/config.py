@@ -19,9 +19,21 @@ class OptimizationConfig:
                 "calibration_data": "calibration/",
                 "preset": "mixed",
                 "subset_size": 300,
+                "target_device": "any",
             },
         },
-        "advanced": {"input_shape": None, "input_names": None, "output_names": None},
+        "preprocessing": {
+            "input_dtype": None,  # "u8", "f16", "f32", or null (no change)
+            "mean_values": None,  # per-channel means to subtract, e.g. [123.675, 116.28, 103.53]
+            "scale_values": None,  # per-channel values to divide by, e.g. [255.0, 255.0, 255.0]
+        },
+        "advanced": {
+            "input_shape": None,
+            "input_names": None,
+            "output_names": None,
+            "batch_size": 1,
+            "dynamic_batch": False,
+        },
     }
 
     def __init__(self, config_dict: dict[str, Any] | None = None):
@@ -84,10 +96,35 @@ class OptimizationConfig:
         if preset not in ["performance", "mixed", "accuracy"]:
             raise ValueError(f"Invalid quantization preset: {preset}. Must be 'performance', 'mixed', or 'accuracy'")
 
+        # Validate quantization target device
+        target_device = self.get_quantization_target_device()
+        if target_device not in ["any", "cpu", "gpu", "npu"]:
+            raise ValueError(
+                f"Invalid quantization target_device: '{target_device}'. Must be 'any', 'cpu', 'gpu', or 'npu'"
+            )
+
         # Validate subset size
         subset_size = self.get_quantization_subset_size()
         if not isinstance(subset_size, int) or subset_size <= 0:
             raise ValueError(f"Invalid subset_size: {subset_size}. Must be a positive integer")
+
+        # Validate batch size
+        batch_size = self.get_batch_size()
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(f"Invalid batch_size: {batch_size}. Must be a positive integer")
+
+        # dynamic_batch and batch_size > 1 are mutually exclusive
+        if self.config["advanced"].get("dynamic_batch") and batch_size > 1:
+            raise ValueError("dynamic_batch=true and batch_size > 1 are mutually exclusive")
+
+        # Validate preprocessing
+        input_dtype = self.get_preprocessing_input_dtype()
+        if input_dtype is not None and input_dtype not in ("u8", "f16", "f32"):
+            raise ValueError(f"Invalid preprocessing.input_dtype: '{input_dtype}'. Must be 'u8', 'f16', or 'f32'")
+        for field in ("mean_values", "scale_values"):
+            val = self.config["preprocessing"][field]
+            if val is not None and (not isinstance(val, list) or not all(isinstance(v, int | float) for v in val)):
+                raise ValueError(f"Invalid preprocessing.{field}: must be a list of numbers or null")
 
     # Getters for configuration values
 
@@ -118,6 +155,51 @@ class OptimizationConfig:
     def get_quantization_subset_size(self) -> int:
         """Get calibration subset size"""
         return self.config["optimization"]["quantization"]["subset_size"]
+
+    def get_quantization_target_device(self) -> str:
+        """Get quantization target device ('any', 'cpu', 'gpu', or 'npu')"""
+        return self.config["optimization"]["quantization"].get("target_device", "any")
+
+    def get_preprocessing_input_dtype(self) -> str | None:
+        """Get preprocessing input dtype override ('u8', 'f16', 'f32', or None)"""
+        return self.config["preprocessing"]["input_dtype"]
+
+    def get_mean_values(self) -> list | None:
+        """Get per-channel mean values to subtract (or None)"""
+        return self.config["preprocessing"]["mean_values"]
+
+    def get_scale_values(self) -> list | None:
+        """Get per-channel scale values to divide by (or None)"""
+        return self.config["preprocessing"]["scale_values"]
+
+    def has_preprocessing(self) -> bool:
+        """Return True if any preprocessing step is configured"""
+        return any(self.config["preprocessing"][k] is not None for k in ("input_dtype", "mean_values", "scale_values"))
+
+    def with_u8_preprocessing(self, scale_values: list) -> "OptimizationConfig":
+        """Return a copy with u8 input dtype and the given scale_values set."""
+        import copy
+
+        new = copy.deepcopy(self)
+        new.config["preprocessing"]["input_dtype"] = "u8"
+        new.config["preprocessing"]["scale_values"] = scale_values
+        return new
+
+    def with_input_dtype(self, dtype: str) -> "OptimizationConfig":
+        """Return a copy with just the input_dtype set (no scale/mean changes)."""
+        import copy
+
+        new = copy.deepcopy(self)
+        new.config["preprocessing"]["input_dtype"] = dtype
+        return new
+
+    def get_batch_size(self) -> int:
+        """Get batch size (default 1)"""
+        return self.config["advanced"]["batch_size"]
+
+    def is_dynamic_batch(self) -> bool:
+        """Return True if batch dimension should be kept dynamic in the IR"""
+        return bool(self.config["advanced"].get("dynamic_batch", False))
 
     def get_input_shape(self) -> list | None:
         """Get input shape override"""
