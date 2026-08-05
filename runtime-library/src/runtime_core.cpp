@@ -993,11 +993,17 @@ RuntimeStatus runtime_cleanup(void) {
   while (g_output_queue.try_dequeue(item)) deep_free_tensors(item.tensors);
   sem_destroy(&g_output_sem);
 
+  // Deliberately NOT calling ov::shutdown() here: per its own doc comment it
+  // "delete[s] all static-duration objects allocated by [OpenVINO]" and is
+  // meant for final teardown right before this library itself is unloaded —
+  // not for a cleanup that a subsequent runtime_init() can follow. The OAAX
+  // contract requires repeated init/load/cleanup cycles to work within the
+  // same loaded module (see tests/runtime/lifecycle_test.cpp), which is
+  // exactly what a pipeline/model reselect in the host does without ever
+  // unloading this library. Calling ov::shutdown() here raced OpenVINO's
+  // fresh-Core creation on the next runtime_init() against TBB's own
+  // internal NUMA/topology teardown, crashing inside tbbbind (AIMP-1477).
   g_core.reset();
-  // Unload OpenVINO plugin libraries and release their global resources so
-  // as few of their threads as possible outlive cleanup (they can pin
-  // openvino/plugin DLLs on Windows and block replacing the runtime folder).
-  ov::shutdown();
   g_initialized = false;
   g_models_loaded = false;
   g_last_error.clear();
