@@ -62,6 +62,6 @@ CMD ["--help"]
 # Document expected volumes
 VOLUME ["/input", "/output"]
 
-# Document that this runs as root (can be overridden at runtime with --user)
+# Document that this runs as root (uid 0; can be overridden at runtime with --user)
 # hadolint ignore=DL3002
-USER root
+USER 0
