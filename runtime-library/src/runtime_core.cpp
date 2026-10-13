@@ -1002,7 +1002,7 @@ RuntimeStatus runtime_cleanup(void) {
   // exactly what a pipeline/model reselect in the host does without ever
   // unloading this library. Calling ov::shutdown() here raced OpenVINO's
   // fresh-Core creation on the next runtime_init() against TBB's own
-  // internal NUMA/topology teardown, crashing inside tbbbind (AIMP-1477).
+  // internal NUMA/topology teardown, crashing inside tbbbind.
   g_core.reset();
   g_initialized = false;
   g_models_loaded = false;

@@ -3,19 +3,18 @@
 #             to the local inference engine directory.
 #
 # Usage:
-#   bash deploy.sh [--dest <path>] [--profile]
+#   bash deploy.sh --dest <path> [--profile]
+#   OAAX_DEPLOY_DEST=<path> bash deploy.sh [--profile]
 #
 # Options:
 #   --profile   Build with OAAX_PROFILE=ON (per-request timing logs)
-#   --dest      Override destination directory
-#
-# Default destination: ~/witness-ai-manager/inference_engine/
+#   --dest      Destination directory (or set OAAX_DEPLOY_DEST); required
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT}/runtime-library/build"
-DEST="${HOME}/witness-ai-manager/inference_engine"
+DEST="${OAAX_DEPLOY_DEST:-}"
 PROFILE=0
 
 # Parse arguments
@@ -26,6 +25,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
+
+[[ -n "${DEST}" ]] || { echo "ERROR: no destination — pass --dest <path> or set OAAX_DEPLOY_DEST"; exit 1; }
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 OPENVINO_DIR="${OPENVINO_DIR:-/opt/intel/openvino/runtime}"

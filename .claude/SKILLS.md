@@ -1280,14 +1280,14 @@ bash scripts/check-secrets.sh path/to/file
 2. **Sensitive filenames** — `.env`, `*.pem`, `*.key`, `credentials*`, `secrets*`
 3. **Large binary files** — model weights, `.bin` files over 1 MB that should never be committed
 4. **S3/storage endpoints** — literal hostnames from `~/.s3cfg` or CI secrets that must stay in GitHub Secrets only
-5. **Internal URLs** — `nbg1.your-objectstorage.com` and similar private storage endpoints hardcoded in source
+5. **Internal URLs** — private storage endpoints hardcoded in source
 
 ### Project-specific confidential items
 
 The following must NEVER appear in source files or logs:
 
 - `S3_ACCESS_KEY` / `S3_SECRET_KEY` values — must only be in GitHub repository secrets
-- `S3_ENDPOINT_URL` value (`nbg1.your-objectstorage.com`) — acceptable as a hostname pattern but not combined with credentials
+- `S3_ENDPOINT_URL` value — keep in GitHub repository secrets, never hardcode it next to credentials
 - Bucket name `oaax` — public knowledge, but don't log alongside credentials
 - Any NNCF calibration dataset contents — may contain proprietary images
 - Model weights (`.pt`, `.onnx` files) — large, may be proprietary; confirmed excluded in `.gitignore`
@@ -1303,7 +1303,7 @@ DUMMY_KEY = "AKIAIOSFODNN7EXAMPLE"
 
 ```bash
 # check-secrets-ignore: internal test URL, not a real endpoint
-TEST_URL="https://fake.nbg1.your-objectstorage.com"
+TEST_URL="https://fake.storage.example.com"
 ```
 
 ### When to escalate

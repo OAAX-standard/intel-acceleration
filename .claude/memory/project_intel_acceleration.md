@@ -3,8 +3,8 @@ name: intel-acceleration project state
 description: Current architecture, test framework, artifact packaging, and benchmark results for the OAAX Intel acceleration project
 type: project
 ---
-OAAX runtime + conversion toolchain for Intel hardware using OpenVINO 2026.1.0 + NNCF 2.19.0. Version: 1.2.0
-Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: pure-openvino-implementation (open PR #17 — do NOT merge without Ayoub's approval)
+OAAX runtime + conversion toolchain for Intel hardware using OpenVINO 2026.1.0 + NNCF 2.19.0. Version: see `VERSION` file
+Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: `oaax-v2` (OAAX v2 interface), merging into `main`
 
 **Why:** Production OAAX implementation for Intel CPU/GPU/NPU, replaces ONNX Runtime with native OpenVINO C++ API.
 **How to apply:** Understand the two-component split (Python toolchain + C++ runtime) and the two-stage test workflow.
@@ -24,12 +24,12 @@ Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: pure-openvino
 ## Two-stage test workflow
 
 **Stage 1** (`python tests/stage1.py`):
-- Converts YOLO models (yolov8n, yolo11n) to FP32/FP16/INT8 IR → `tests/compiled_models/` (cached)
-- Runs `tests/test_conversion.py` + `tests/test_yolo_integration.py`
+- Converts YOLOX models (yolox_nano/tiny/s; native, 320 and batch=4 variants) to FP32/FP16/INT8/INT8_NPU IR → `tests/compiled_models/` (cached). Models are the official Apache-2.0 YOLOX ONNX, adapted by `tests/models.py` — never use AGPL models/packages (ultralytics) in this repo
+- Runs `tests/test_conversion.py` + `tests/test_detector_integration.py`
 
 **Stage 2** (`python tests/stage2.py [--devices CPU,GPU.0] [--csv results.csv]`):
 - Step 1: `benchmark_app -hint throughput -latency_percentile 95` on all variants × devices
-- Step 2: C++ `yolo_test` binary on all variants (FP32/FP16/INT8) × devices
+- Step 2: C++ `detector_test` binary on all variants (FP32/FP16/INT8) × devices
 - `--csv` appends rows: `timestamp,tool,model,variant,device,avg_ms,min_ms,p95_ms,throughput_fps`
 
 ## Runtime initialization args (key/value pairs via runtime_initialization_with_args)
@@ -128,4 +128,4 @@ Average latency is skewed by queue depth with 1 infer slot — use **min latency
 - **`runtime_cleanup()` must stay safe to call repeatedly** (each followed by another
   `runtime_init()`, same loaded module, no unload in between) — see
   `.claude/memory/project_windows_runtime_fixes.md`'s 2026-08-05 entry for the `ov::shutdown()`
-  regression this caused (AIMP-1477) and why `ov::shutdown()` can never go back in there.
+  regression this caused and why `ov::shutdown()` can never go back in there.

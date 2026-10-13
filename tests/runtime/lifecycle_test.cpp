@@ -1,7 +1,7 @@
 /**
  * Runtime lifecycle tests for the OAAX v2 interface.
  *
- * Regression guard for AIMP-1477: runtime_cleanup() must be safe to follow
+ * Regression guard: runtime_cleanup() must be safe to follow
  * with another runtime_init() in the same loaded module, with a real model
  * compiled and run in between (not just an empty Core, which simple_test's
  * double-init/cleanup checks already cover). This is exactly the pipeline/
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         ASSERT(runtime_cleanup() == RUNTIME_STATUS_SUCCESS, "cycle 1: cleanup failed");
 
         // Cycle 2 — immediately reinit and run another full round-trip. Before
-        // the AIMP-1477 fix, runtime_cleanup() called ov::shutdown() here,
+        // the fix, runtime_cleanup() called ov::shutdown() here,
         // racing this cycle's fresh ov::Core() against TBB's own teardown of
         // the previous cycle's NUMA/topology state (crash in tbbbind).
         ASSERT(runtime_init(cfg) == RUNTIME_STATUS_SUCCESS, "cycle 2: init failed");
