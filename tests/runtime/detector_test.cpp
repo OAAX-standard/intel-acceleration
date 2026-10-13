@@ -7,7 +7,8 @@
  *   ./detector_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
  *               [--perf-hint latency|throughput] [--input-dtype f32|u8|f16]
  *               [--in-flight N] [--imgsz N] [--queue-limit-test]
- * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=5, imgsz=640
+ * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=auto (the runtime's infer-request
+ * count), imgsz=640
  */
 
 #include <algorithm>
@@ -120,6 +121,15 @@ static bool validate_output(const Tensors *out, int batch, int imgsz) {
     return true;
 }
 
+// First "num_infer_requests" in the runtime_get_info() JSON, or 0 if it is not reported.
+static int infer_request_count() {
+    const char *info = runtime_get_info();
+    if (!info) return 0;
+    const char *key = "\"num_infer_requests\":";
+    const char *p = strstr(info, key);
+    return p ? atoi(p + strlen(key)) : 0;
+}
+
 static double percentile(std::vector<double> v, double p) {
     std::sort(v.begin(), v.end());
     size_t idx = (size_t)(p / 100.0 * (double)(v.size() - 1) + 0.5);
@@ -210,8 +220,8 @@ int main(int argc, char **argv) {
     int runs = 30;
     int warmup = 5;
     int batch = 1;
-    int nireq = 0;  // 0 = use runtime default (optimal)
-    int in_flight = 5;
+    int nireq = 0;      // 0 = use runtime default (optimal)
+    int in_flight = 0;  // 0 = auto: match the runtime's infer-request count
     int imgsz = 640;
     int log_level = 2;  // spdlog level: 0=trace 1=debug 2=info 3=warn 4=err
     bool test_queue_limit = false;
@@ -255,7 +265,7 @@ int main(int argc, char **argv) {
     std::cout << "nireq     : " << (nireq > 0 ? std::to_string(nireq) : "auto") << std::endl;
     std::cout << "Input dtype: " << input_dtype_str << std::endl;
     std::cout << "Input name : " << input_name << std::endl;
-    std::cout << "In-flight  : " << in_flight << std::endl;
+    std::cout << "In-flight  : " << (in_flight > 0 ? std::to_string(in_flight) : std::string("auto")) << std::endl;
     std::cout << "Image size : " << imgsz << "x" << imgsz << std::endl;
     std::cout << "Warmup    : " << warmup << " runs" << std::endl;
     std::cout << "Runs      : " << runs << std::endl << std::endl;
@@ -280,6 +290,14 @@ int main(int argc, char **argv) {
           std::string("runtime_load_models failed: ") + (runtime_get_error() ? runtime_get_error() : ""));
     double load_ms = Ms(Clock::now() - tload).count();
     std::cout << "  Loaded in " << load_ms << " ms" << std::endl;
+
+    // Fewer requests in flight than the runtime has infer requests starves fast models (INT8 nano/tiny lost ~50%
+    // of their throughput at the old fixed depth of 5 on a 20-core CPU), so default to using all of them.
+    if (in_flight <= 0) {
+        in_flight = infer_request_count();
+        if (in_flight <= 0) in_flight = 5;
+        std::cout << "  In-flight  : " << in_flight << " (auto)" << std::endl;
+    }
 
     // ── 3. Warmup ─────────────────────────────────────────────────────────────
     std::cout << "[3] Warming up (" << warmup << " runs)..." << std::endl;

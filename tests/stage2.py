@@ -47,7 +47,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runs", type=int, default=300, help="detector_test inference runs")
     p.add_argument("--warmup", type=int, default=5, help="detector_test warmup runs")
     p.add_argument(
-        "--in-flight", type=int, default=5, help="max parallel in-flight requests (detector_test --in-flight)"
+        "--in-flight",
+        type=int,
+        default=0,
+        help="max parallel in-flight requests (detector_test --in-flight; 0 = auto: the runtime's infer-request count)",
     )
     p.add_argument("--log-level", type=int, default=2, help="runtime log level: 0=trace 1=debug 2=info 3=warn 4=err")
     p.add_argument(
@@ -220,7 +223,7 @@ def run_detector_test(
     batch: int = 1,
     perf_hint: str = "throughput",
     imgsz: int = 640,
-    in_flight: int = 5,
+    in_flight: int = 0,
     log_level: int = 2,
     no_validate: bool = False,
     input_dtype: str = "f32",
@@ -247,7 +250,7 @@ def run_detector_test(
         cmd += ["--batch", str(batch)]
     if imgsz != 640:
         cmd += ["--imgsz", str(imgsz)]
-    if in_flight != 5:
+    if in_flight > 0:
         cmd += ["--in-flight", str(in_flight)]
     if log_level != 2:
         cmd += ["--log-level", str(log_level)]

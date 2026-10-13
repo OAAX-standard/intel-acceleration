@@ -100,6 +100,8 @@ The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_out
   benchmark ran. `simple_test` no longer uses a GCC-only attribute, so it builds with MSVC.
 - Removed the dead `OAAX_PROFILE` build flag (the profiler no longer exists) from `build-runtimes.sh` and
   `deploy.sh`; `.gitignore` now covers runtime logs, compile caches, weights and Python caches.
+- `detector_test` defaults its in-flight depth to the runtime's infer-request count (was a fixed 5, which
+  halved the measured throughput of fast INT8 models on many-core CPUs); `stage2.py --in-flight 0` means auto.
 
 ### Fixed
 

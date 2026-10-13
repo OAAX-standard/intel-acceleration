@@ -15,7 +15,7 @@
 #   PRECISIONS    Space-separated precision filter          (default: all)
 #                 e.g. "FP32 FP16"
 #   CSV           Path for CSV output                       (default: none)
-#   IN_FLIGHT     Max parallel in-flight requests            (default: 5)
+#   IN_FLIGHT     Max parallel in-flight requests (0 = auto)  (default: 100)
 #   LOG_LEVEL     Runtime log level 0=trace..4=err           (default: 2/info)
 #   SKIP_BENCH    Set to 1 to skip benchmark_app section    (default: 0)
 #   SKIP_RUNTIME  Set to 1 to skip detector_test section        (default: 0)

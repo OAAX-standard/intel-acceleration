@@ -73,20 +73,33 @@ pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
 
 ## Benchmarks
 
-Throughput numbers are produced by Stage 2 on the YOLOX test models (`yolox_nano`, `yolox_tiny`, `yolox_s`);
-run it on an otherwise idle machine and compare `benchmark_app` with the OAAX runtime (`detector_test`):
+Intel Core i7-12700K, CPU, batch=1, `throughput` hint, YOLOX test models. `benchmark_app` runs 10 s per
+configuration; the OAAX runtime numbers come from `detector_test` (300 runs, in-flight depth = the runtime's
+infer-request count). Median of 3 repetitions; spread between repetitions was ≤ 3%.
 
-```bash
-python tests/stage2.py --devices CPU,GPU --duration 10 --csv results.csv
-```
+| Model | Precision | benchmark_app | OAAX runtime | Delta |
+|-------|-----------|--------------|--------------|-------|
+| yolox_nano | FP32 | ~422 FPS | ~395 FPS | -7% |
+| yolox_nano | FP16 | ~429 FPS | ~405 FPS | -6% |
+| yolox_nano | INT8 | **~664 FPS** | **~606 FPS** | -9% |
+| yolox_tiny | FP32 | ~117 FPS | ~115 FPS | -2% |
+| yolox_tiny | FP16 | ~120 FPS | ~119 FPS | -1% |
+| yolox_tiny | INT8 | **~351 FPS** | **~337 FPS** | -4% |
+| yolox_s | FP32 | ~30 FPS | ~29 FPS | -0% |
+| yolox_s | FP16 | ~30 FPS | ~30 FPS | -0% |
+| yolox_s | INT8 | **~92 FPS** | **~91 FPS** | -1% |
 
-Earlier measurements on an Intel Core i7-12700K (CPU, iGPU UHD 770 + dGPU RTX A4000), taken with different test models and
-not yet re-verified on YOLOX, showed:
+- FP32 and FP16 perform the same: this CPU has no native FP16 ALU, so OpenVINO computes FP16 as FP32 internally.
+  INT8 is ~3× faster for tiny and s, and ~1.6× for nano.
+- The runtime stays within ~1–9% of `benchmark_app`; the gap grows with model speed, which points to a per-inference
+  cost at the C API boundary (input/output copies) rather than to the inference itself.
+- Keep enough requests in flight: the runtime sizes its infer-request pool from the CPU (18 on this machine) and a
+  caller that submits fewer starves fast models. With only 5 in flight, INT8 nano/tiny reached about half of the
+  numbers above. `detector_test` now defaults to the runtime's request count.
 
-- FP32 and FP16 perform the same on CPUs without a native FP16 ALU — OpenVINO computes FP16 as FP32 internally.
-  Only INT8 benefits from AVX2/VNNI (~2.5×).
-- The OAAX runtime lands within ~5% of `benchmark_app`; the gap is producer/consumer thread overhead at the C API boundary.
-- On multi-GPU hosts, `device_type=GPU` with `perf_hint=cumulative_throughput` gives the best aggregate FPS.
+Reproduce with `python tests/stage2.py --devices CPU --duration 10 --runs 300 --csv results.csv` on an otherwise
+idle machine. Multi-GPU hosts should use `device_type=GPU` with `perf_hint=cumulative_throughput`
+(not re-benchmarked with these models).
 
 ## Contributing
 
