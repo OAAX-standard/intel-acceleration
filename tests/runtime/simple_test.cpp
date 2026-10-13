@@ -11,8 +11,10 @@
  * 7. runtime_cleanup() succeeds
  */
 
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <string>
 
 #include "oaax_runtime.h"
 
