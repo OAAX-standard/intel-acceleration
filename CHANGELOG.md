@@ -6,17 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.0.1] - 2026-04-22
-
-### Fixed
-
-- **Runtime:** Model loading no longer crashes on VMs (e.g. QEMU) that do not expose the `pclmulqdq`
-  CPU instruction. OpenVINO requires this instruction for CRC hashing when the compiled-model cache
-  is active. The runtime now catches the exception, disables caching globally for the session, and
-  retries compilation on the same device — transparent to the caller and requiring no config change.
-
----
-
 ## [2.0.0] - 2026-04-19
 
 ### Runtime Library — OAAX v2 Interface
@@ -105,6 +94,31 @@ The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_out
 - **Windows integration job simplified:** removed the OpenVINO install step from
   `integration-tests-windows`; test binaries now link only against the downloaded
   `RuntimeLibrary.lib` without needing the full OpenVINO SDK on the runner.
+
+### Fixed
+
+- **Runtime:** Model loading no longer crashes on VMs (e.g. QEMU) that do not expose the `pclmulqdq`
+  CPU instruction. OpenVINO requires this instruction for CRC hashing when the compiled-model cache
+  is active. The runtime now catches the exception, disables caching globally for the session, and
+  retries compilation on the same device — transparent to the caller and requiring no config change.
+
+### Test suite licensing
+
+- **Tests: AGPL-licensed models and dependencies removed.** The test suite no longer uses
+  `ultralytics` (AGPL-3.0) or any Ultralytics model (YOLOv8/11/12/26). Detector tests now use the
+  official [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) ONNX models (Apache-2.0: nano, tiny, s),
+  downloaded and SHA-256-verified at test time. `tests/models.py` adapts them to the batch size and
+  resolution a test needs; batch=4 output is verified identical to four batch=1 runs.
+- Calibration images now come from a fixed list of 128 COCO ids (`tests/calibration_images.txt`) fetched
+  from cocodataset.org instead of the Ultralytics `coco128` bundle.
+- Renamed `tests/runtime/yolo_test.cpp` → `detector_test.cpp` and `tests/test_yolo_integration.py` →
+  `test_detector_integration.py`; detector output is now validated as `[batch, anchors, 85]`.
+  `multi_model_test` gained `--imgsz`.
+- Dropped the YOLO26 test groups (their post-processed `[batch, 300, 6]` head has no YOLOX equivalent).
+- The `integration` extra now installs `onnx` instead of `ultralytics`; `torch`/`torchvision` are no longer
+  pulled in. The root project's `requires-python` is now `>=3.13`, matching the conversion toolchain
+  (the old `>=3.10` made `uv lock` fail as soon as any dependency changed).
+- `ThirdPartyNotices.txt`: removed the ultralytics entry; added YOLOX and COCO.
 
 ---
 
