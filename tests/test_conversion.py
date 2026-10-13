@@ -487,12 +487,23 @@ class TestBatchSize:
         return model_path
 
     @pytest.fixture
-    def yolov8n_model(self):
-        models_dir = Path(__file__).parent / "test_models"
-        model_path = models_dir / "yolov8n.onnx"
-        if not model_path.exists():
-            pytest.skip("yolov8n.onnx not available")
-        return str(model_path)
+    def hardcoded_batch_model(self, temp_dir):
+        """Tiny ONNX whose Reshape hardcodes batch=1, like detector post-processing with baked constants."""
+        import numpy as np
+        import onnx
+        from onnx import TensorProto, helper
+        from onnx import numpy_helper as nh
+
+        inp = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 8, 8])
+        out = helper.make_tensor_value_info("out", TensorProto.FLOAT, [1, 192])
+        shape = nh.from_array(np.array([1, 192], dtype=np.int64), "shape")
+        graph = helper.make_graph(
+            [helper.make_node("Reshape", ["images", "shape"], ["out"])], "hardcoded_batch", [inp], [out], [shape]
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+        path = Path(temp_dir) / "hardcoded_batch.onnx"
+        onnx.save(model, str(path))
+        return str(path)
 
     def test_config_batch_size_default(self):
         """Default batch_size is 1"""
@@ -580,12 +591,12 @@ class TestBatchSize:
         model = ov.Core().read_model(str(next(extract_dir2.glob("*.xml"))))
         assert model.inputs[0].shape[0] == self.BATCH_SIZE
 
-    def test_hardcoded_batch_error_message(self, yolov8n_model, temp_dir):
-        """YOLO models with hardcoded batch=1 raise a clear error"""
+    def test_hardcoded_batch_error_message(self, hardcoded_batch_model, temp_dir):
+        """Models with hardcoded batch=1 constants raise a clear error"""
         config = OptimizationConfig({"advanced": {"batch_size": self.BATCH_SIZE}})
         logs = Logs()
         with pytest.raises(RuntimeError, match="batch_size=4"):
-            convert_to_ir(yolov8n_model, temp_dir, logs, config)
+            convert_to_ir(hardcoded_batch_model, temp_dir, logs, config)
 
 
 class TestPreprocessingConfig:

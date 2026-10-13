@@ -8,12 +8,12 @@ dynamic = ["version"]
 description = "Test suite for the OAAX Intel Acceleration runtime and conversion toolchain"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 keywords = ["oaax", "openvino", "intel", "inference", "npu", "gpu", "quantization"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.11",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Operating System :: POSIX :: Linux",
@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-integration = ["ultralytics>=8.3.0"]
+integration = ["onnx>=1.14"]
 quantization = ["nncf>=2.19.0,<3.0.0"]
 all = ["intel-acceleration-tests[integration,quantization]"]
 
@@ -50,7 +50,7 @@ markers = [
 # ── Ruff (lint + format) ──────────────────────────────────────────────────────
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [

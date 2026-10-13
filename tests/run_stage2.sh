@@ -2,23 +2,23 @@
 # run_stage2.sh — wrapper around tests/stage2.py with convenient defaults
 #
 # All variables can be set from the environment before running, e.g.:
-#   DEVICES="CPU GPU.0" MODELS="yolo11n yolo11s" PRECISIONS="FP32" bash tests/run_stage2.sh
+#   DEVICES="CPU GPU.0" MODELS="yolox_nano yolox_s" PRECISIONS="FP32" bash tests/run_stage2.sh
 #
 # Available variables:
 #   DEVICES       Space or comma-separated device list      (default: CPU)
 #   PERF_HINTS    Space or comma-separated hint list        (default: throughput)
-#   RUNS          Inference runs for yolo_test              (default: 100)
-#   WARMUP        Warmup runs for yolo_test                 (default: 5)
+#   RUNS          Inference runs for detector_test              (default: 100)
+#   WARMUP        Warmup runs for detector_test                 (default: 5)
 #   DURATION      benchmark_app duration in seconds         (default: 10)
 #   MODELS        Space-separated model name filter         (default: all)
-#                 e.g. "yolo11n yolo11n_320"
+#                 e.g. "yolox_nano yolox_nano_320"
 #   PRECISIONS    Space-separated precision filter          (default: all)
 #                 e.g. "FP32 FP16"
 #   CSV           Path for CSV output                       (default: none)
 #   IN_FLIGHT     Max parallel in-flight requests            (default: 5)
 #   LOG_LEVEL     Runtime log level 0=trace..4=err           (default: 2/info)
 #   SKIP_BENCH    Set to 1 to skip benchmark_app section    (default: 0)
-#   SKIP_RUNTIME  Set to 1 to skip yolo_test section        (default: 0)
+#   SKIP_RUNTIME  Set to 1 to skip detector_test section        (default: 0)
 
 set -euo pipefail
 
@@ -32,7 +32,7 @@ PERF_HINTS="${PERF_HINTS:-throughput}"
 RUNS="${RUNS:-2000}"
 WARMUP="${WARMUP:-100}"
 DURATION="${DURATION:-5}"
-MODELS="${MODELS:-yolo26s_320}"
+MODELS="${MODELS:-yolox_nano_320}"
 PRECISIONS="${PRECISIONS:-INT8}"
 CSV="${CSV:-}"
 IN_FLIGHT="${IN_FLIGHT:-100}"
@@ -62,9 +62,9 @@ if [[ -f "${VENV}/bin/activate" ]]; then
     source "${VENV}/bin/activate"
 fi
 
-# ── Build yolo_test if needed ─────────────────────────────────────────────────
-if [[ "${SKIP_RUNTIME}" != "1" && ! -f "${TEST_BUILD_DIR}/yolo_test" ]]; then
-    echo "[run_stage2] Building yolo_test..."
+# ── Build detector_test if needed ─────────────────────────────────────────────────
+if [[ "${SKIP_RUNTIME}" != "1" && ! -f "${TEST_BUILD_DIR}/detector_test" ]]; then
+    echo "[run_stage2] Building detector_test..."
     bash "${ROOT}/tests/runtime/build-tests.sh"
 fi
 

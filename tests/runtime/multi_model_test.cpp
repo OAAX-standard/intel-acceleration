@@ -7,17 +7,19 @@
  *  - All outputs are received (no dropped results)
  *  - model_id on each output matches the model that produced it
  *  - Tensors.id echoed on output matches the id set on input (request correlation)
- *  - Output shapes are valid YOLO output (1 x 84 x 8400)
+ *  - Output shapes are valid YOLOX output (1 x anchors x 85)
  *
  * Usage:
- *   ./multi_model_test <model.zip> [model2.zip]
+ *   ./multi_model_test <model.zip> [model2.zip] [--imgsz N]
  *
  * If only one path is given the same zip is loaded as both model 0 and model 1.
+ * Both models must take the same square input (default 640; yolox_nano/tiny use --imgsz 416).
  */
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <mutex>
@@ -27,11 +29,16 @@
 
 #include "oaax_runtime.h"
 
-static const int YOLO_CHANNELS = 3;
-static const int YOLO_HEIGHT = 640;
-static const int YOLO_WIDTH = 640;
-static const int YOLO_OUT_CH = 84;
-static const int YOLO_ANCHORS = 8400;
+static const int DET_CHANNELS = 3;
+static const int DET_OUT_COLS = 85;  // cx, cy, w, h, objectness + 80 COCO class scores
+static int g_imgsz = 640;            // set with --imgsz
+
+// YOLOX anchors for a square input: one per cell on the stride-8/16/32 feature maps.
+static int expected_anchors(int imgsz) {
+    int n = 0;
+    for (int stride : {8, 16, 32}) n += (imgsz / stride) * (imgsz / stride);
+    return n;
+}
 
 static const int N_REQUESTS = 20;  // requests per model
 
@@ -63,7 +70,7 @@ static void free_tensors(Tensors *t) {
     free(t);
 }
 
-static Tensors *make_yolo_input(int request_id) {
+static Tensors *make_detector_input(int request_id) {
     Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
     if (!ts) return nullptr;
     ts->id = request_id;
@@ -80,10 +87,10 @@ static Tensors *make_yolo_input(int request_id) {
     td.rank = 4;
     td.shape = (int *)malloc(4 * sizeof(int));
     td.shape[0] = 1;
-    td.shape[1] = YOLO_CHANNELS;
-    td.shape[2] = YOLO_HEIGHT;
-    td.shape[3] = YOLO_WIDTH;
-    td.data_size = YOLO_CHANNELS * YOLO_HEIGHT * YOLO_WIDTH * sizeof(float);
+    td.shape[1] = DET_CHANNELS;
+    td.shape[2] = g_imgsz;
+    td.shape[3] = g_imgsz;
+    td.data_size = DET_CHANNELS * g_imgsz * g_imgsz * sizeof(float);
     td.data = calloc(1, td.data_size);
     if (!td.data) {
         free(td.shape);
@@ -95,13 +102,13 @@ static Tensors *make_yolo_input(int request_id) {
     return ts;
 }
 
-static bool valid_yolo_output(const Tensors *out) {
+static bool valid_detector_output(const Tensors *out) {
     if (!out || out->num_tensors != 1) return false;
     const TensorDescriptor &td = out->tensors[0];
     if (td.rank != 3) return false;
     if (td.shape[0] != 1) return false;
-    if (td.shape[1] != YOLO_OUT_CH) return false;
-    if (td.shape[2] != YOLO_ANCHORS) return false;
+    if (td.shape[1] != expected_anchors(g_imgsz)) return false;
+    if (td.shape[2] != DET_OUT_COLS) return false;
     if (td.data_type != DATA_TYPE_FLOAT) return false;
     return true;
 }
@@ -109,13 +116,20 @@ static bool valid_yolo_output(const Tensors *out) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <model.zip> [model2.zip]" << std::endl;
+    std::vector<const char *> paths;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--imgsz") == 0 && i + 1 < argc)
+            g_imgsz = atoi(argv[++i]);
+        else
+            paths.push_back(argv[i]);
+    }
+    if (paths.empty()) {
+        std::cerr << "Usage: " << argv[0] << " <model.zip> [model2.zip] [--imgsz N]" << std::endl;
         return 1;
     }
 
-    const char *path0 = argv[1];
-    const char *path1 = argc > 2 ? argv[2] : argv[1];
+    const char *path0 = paths[0];
+    const char *path1 = paths.size() > 1 ? paths[1] : paths[0];
 
     std::cout << "=== Multi-model async inference test ===" << std::endl;
     std::cout << "  Model 0: " << path0 << std::endl;
@@ -162,7 +176,7 @@ int main(int argc, char **argv) {
     // Producer for model 0
     std::thread prod0([&]() {
         for (int i = 0; i < N_REQUESTS; ++i) {
-            Tensors *input = make_yolo_input(i);
+            Tensors *input = make_detector_input(i);
             if (!input) {
                 ok = false;
                 return;
@@ -181,7 +195,7 @@ int main(int argc, char **argv) {
     std::thread prod1([&]() {
         for (int i = 0; i < N_REQUESTS; ++i) {
             int id = ID_OFFSET_M1 + i;
-            Tensors *input = make_yolo_input(id);
+            Tensors *input = make_detector_input(id);
             if (!input) {
                 ok = false;
                 return;
@@ -214,7 +228,7 @@ int main(int argc, char **argv) {
             in_flight--;
 
             // Verify output shape
-            if (!valid_yolo_output(output)) shape_errors++;
+            if (!valid_detector_output(output)) shape_errors++;
 
             // Verify model_id <-> id correlation
             int id = output->id;

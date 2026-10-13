@@ -243,7 +243,7 @@ runtime-library/
 └── build-runtime.bat       # Windows build script
 ```
 
-Test sources: `../tests/runtime/simple_test.cpp`, `../tests/runtime/yolo_test.cpp`
+Test sources: `../tests/runtime/simple_test.cpp`, `../tests/runtime/detector_test.cpp`
 
 ## License
 

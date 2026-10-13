@@ -25,7 +25,7 @@ Requirements:
 - CMake 3.10.2+
 - GCC 9.5+ / Clang 10+ with C++17
 - Docker 20.10+ (for toolchain builds)
-- Python 3.10+
+- Python 3.13+
 - [uv](https://github.com/astral-sh/uv) (Python package manager)
 
 ## First-time setup
@@ -68,21 +68,21 @@ See each component's README for more options.
 ## Testing locally
 
 ```bash
-# Stage 1: compile YOLO models to FP32/FP16/INT8 IR, run conversion tests
+# Stage 1: compile YOLOX models to FP32/FP16/INT8 IR, run conversion tests
 python tests/stage1.py
 
-# Stage 2: benchmark with benchmark_app + yolo_test
+# Stage 2: benchmark with benchmark_app + detector_test
 python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
 # Individual suites
 pytest tests/test_conversion.py -v
-pytest tests/test_yolo_integration.py -v
+pytest tests/test_detector_integration.py -v
 pytest tests/test_quantization_accuracy.py -v
 
-# C++ smoke tests
-cd runtime-library/build
+# C++ smoke tests (build the runtime first, then: bash tests/runtime/build-tests.sh)
+cd tests/runtime/build
 ./simple_test
-./yolo_test /path/to/model.xml [device] [--runs 300] [--warmup 5] [--perf-hint throughput]
+./detector_test /path/to/model.zip [device] [--runs 300] [--warmup 5] [--perf-hint throughput]
 ```
 
 ## Code style

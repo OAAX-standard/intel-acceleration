@@ -1,7 +1,7 @@
 """
 Shared session fixtures for the OAAX intel-acceleration test suite.
 
-compiled_yolo_models converts all YOLO variants (FP32/FP16/INT8/INT8_NPU) once per
+compiled_detector_models converts all YOLOX variants (FP32/FP16/INT8/INT8_NPU) once per
 session via the Docker toolchain image, caching to tests/compiled_models/.
 Stage 1 populates this cache; Stage 2 reads from it without re-converting.
 """
@@ -18,12 +18,11 @@ from tests.models import download_calibration_images, download_model
 
 COMPILED_DIR = Path(__file__).parent / "compiled_models"
 DOCKER_IMAGE = "oaax-intel-toolchain:latest"
-YOLO_MODELS = ["yolov8n", "yolo11n", "yolo11s"]
-YOLO_MODELS_B4 = ["yolo11n_b4", "yolo11s_b4"]
-YOLO_MODELS_320 = ["yolo11n_320", "yolo11s_320"]
-YOLO_MODELS_320_B4 = ["yolo11n_320_b4", "yolo11s_320_b4"]
-YOLO_MODELS_26S = ["yolo26s", "yolo26s_320", "yolo26m", "yolo26m_320"]
-YOLO_MODELS_26_BATCH = ["yolo26s_b4", "yolo26m_b2"]
+YOLOX_MODELS = ["yolox_nano", "yolox_tiny", "yolox_s"]
+YOLOX_MODELS_B4 = ["yolox_nano_b4", "yolox_s_b4"]
+YOLOX_MODELS_320 = ["yolox_nano_320", "yolox_s_320"]
+YOLOX_MODELS_320_B4 = ["yolox_nano_320_b4", "yolox_s_320_b4"]
+YOLOX_MODEL_U8 = "yolox_nano"  # we test the u8 feature, not model variety
 
 _CONFIGS = {
     "FP32": {"optimization": {"fp16_compression": False}},
@@ -49,6 +48,7 @@ _CONFIGS = {
     },
 }
 
+# Same variants as _CONFIGS minus FP32_U8 (used for the 320 and batch=4 models).
 _CONFIGS_B4 = {
     "FP32": {"optimization": {"fp16_compression": False}},
     "FP16": {"optimization": {"fp16_compression": True}},
@@ -147,17 +147,15 @@ def _convert_with_docker(
 
 @pytest.fixture(scope="session")
 def calibration_dir() -> Path:
-    """Download COCO128 calibration images and return their directory."""
+    """Download the COCO calibration subset and return its directory."""
     d = COMPILED_DIR / "calibration"
     d.mkdir(parents=True, exist_ok=True)
     return Path(download_calibration_images(str(d)))
 
 
-@pytest.fixture(scope="session")
-def compiled_yolo_models(calibration_dir: Path) -> dict:
+def _compile_models(model_names: list[str], configs: dict, calibration_dir: Path) -> dict:
     """
-    Convert all YOLO models (FP32/FP16/INT8/INT8_NPU) once via the Docker toolchain image,
-    caching results to tests/compiled_models/.
+    Convert each model x variant via the Docker toolchain image (cached in tests/compiled_models/).
 
     Returns {(model_name, variant): Path-to-xml}.
     """
@@ -168,303 +166,68 @@ def compiled_yolo_models(calibration_dir: Path) -> dict:
         )
 
     try:
-        import ultralytics  # noqa: F401
+        import onnx  # noqa: F401  (needed to adapt the YOLOX ONNX)
     except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
+        pytest.skip("onnx not installed — run: uv sync --extra integration", allow_module_level=False)
 
     onnx_dir = COMPILED_DIR / "onnx"
     onnx_dir.mkdir(parents=True, exist_ok=True)
 
     result = {}
-    for model_name in YOLO_MODELS:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS.items():
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
+    for model_name in model_names:
+        onnx_path = Path(download_model(model_name, str(onnx_dir)))
+        for variant, config in configs.items():
+            out_dir = COMPILED_DIR / model_name / variant
+            xml = out_dir / f"{model_name}.xml"
+            if not xml.exists():
+                _convert_with_docker(
+                    model_name,
+                    variant,
+                    onnx_path,
+                    out_dir,
+                    config,
+                    calibration_dir if variant in ("INT8", "INT8_NPU") else None,
+                )
+            else:
                 # Ensure a zip exists alongside the extracted IR for the C++ runtime.
                 zip_path = xml.with_suffix(".zip")
                 if not zip_path.exists() and xml.with_suffix(".bin").exists():
                     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                         zf.write(xml, arcname=xml.name)
                         zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
             result[(model_name, variant)] = xml
-
     return result
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_320(calibration_dir: Path) -> dict:
-    """
-    Convert yolo11n/yolo11s at 320x320 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
-    Returns {(model_name, variant): Path-to-xml}.
-    """
-    if not _docker_image_available():
-        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in YOLO_MODELS_320:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS.items():
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
-                zip_path = xml.with_suffix(".zip")
-                if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        zf.write(xml, arcname=xml.name)
-                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
-            result[(model_name, variant)] = xml
-
-    return result
+def compiled_detector_models(calibration_dir: Path) -> dict:
+    """YOLOX nano/tiny/s at native resolution (FP32/FP16/INT8/INT8_NPU)."""
+    configs = {k: v for k, v in _CONFIGS.items() if k != "FP32_U8"}
+    return _compile_models(YOLOX_MODELS, configs, calibration_dir)
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_320_batch4(calibration_dir: Path) -> dict:
-    """
-    Convert yolo11n/yolo11s at 320x320 with batch=4 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
-    Returns {(model_name, variant): Path-to-xml}.
-    """
-    if not _docker_image_available():
-        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in YOLO_MODELS_320_B4:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS_B4.items():
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
-                zip_path = xml.with_suffix(".zip")
-                if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        zf.write(xml, arcname=xml.name)
-                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
-            result[(model_name, variant)] = xml
-
-    return result
+def compiled_detector_models_320(calibration_dir: Path) -> dict:
+    """YOLOX nano/s at 320x320 (FP32/FP16/INT8/INT8_NPU)."""
+    return _compile_models(YOLOX_MODELS_320, _CONFIGS_B4, calibration_dir)
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_u8(calibration_dir: Path) -> dict:
-    """
-    Convert yolo11n with FP32_U8 preprocessing (u8 input boundary, ÷255 baked in)
-    via Docker toolchain. Returns {(model_name, "FP32_U8"): Path-to-xml}.
-    Only yolo11n is converted — we test the feature, not model variety.
-    """
-    if not _docker_image_available():
-        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in ["yolo11n"]:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        config = _CONFIGS["FP32_U8"]
-        xml = COMPILED_DIR / model_name / "FP32_U8" / f"{model_name}.xml"
-        if xml.exists():
-            zip_path = xml.with_suffix(".zip")
-            if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.write(xml, arcname=xml.name)
-                    zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-            result[(model_name, "FP32_U8")] = xml
-            continue
-        _convert_with_docker(
-            model_name,
-            "FP32_U8",
-            onnx,
-            COMPILED_DIR / model_name / "FP32_U8",
-            config,
-            None,
-        )
-        result[(model_name, "FP32_U8")] = xml
-
-    return result
+def compiled_detector_models_batch4(calibration_dir: Path) -> dict:
+    """YOLOX nano/s at native resolution with batch=4 (FP32/FP16/INT8/INT8_NPU)."""
+    return _compile_models(YOLOX_MODELS_B4, _CONFIGS_B4, calibration_dir)
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_26s(calibration_dir: Path) -> dict:
-    """
-    Convert yolo26s at 640x640 and 320x320 (FP32/FP16/INT8/INT8_NPU) via Docker toolchain.
-    Returns {(model_name, variant): Path-to-xml}.
-    """
-    if not _docker_image_available():
-        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in YOLO_MODELS_26S:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS.items():
-            if variant == "FP32_U8":
-                continue
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
-                zip_path = xml.with_suffix(".zip")
-                if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        zf.write(xml, arcname=xml.name)
-                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
-            result[(model_name, variant)] = xml
-
-    return result
+def compiled_detector_models_320_batch4(calibration_dir: Path) -> dict:
+    """YOLOX nano/s at 320x320 with batch=4 (FP32/FP16/INT8/INT8_NPU)."""
+    return _compile_models(YOLOX_MODELS_320_B4, _CONFIGS_B4, calibration_dir)
 
 
 @pytest.fixture(scope="session")
-def compiled_yolo_models_26_batch(calibration_dir: Path) -> dict:
+def compiled_detector_models_u8(calibration_dir: Path) -> dict:
     """
-    Export yolo26s (batch=4) and yolo26m (batch=2), then convert (FP32/FP16/INT8/INT8_NPU)
-    via the Docker toolchain image, caching to tests/compiled_models/.
-
-    Returns {(model_name, variant): Path-to-xml}.
+    YOLOX nano with FP32_U8 preprocessing (u8 input boundary, ÷255 baked in).
+    Returns {(model_name, "FP32_U8"): Path-to-xml}.
     """
-    if not _docker_image_available():
-        pytest.skip(f"Docker image '{DOCKER_IMAGE}' not available.")
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in YOLO_MODELS_26_BATCH:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS_B4.items():
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
-                zip_path = xml.with_suffix(".zip")
-                if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        zf.write(xml, arcname=xml.name)
-                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
-            result[(model_name, variant)] = xml
-
-    return result
-
-
-@pytest.fixture(scope="session")
-def compiled_yolo_models_batch4(calibration_dir: Path) -> dict:
-    """
-    Export yolo11n and yolo11s with batch=4, then convert (FP32/FP16) via
-    the Docker toolchain image, caching to tests/compiled_models/.
-
-    Returns {(model_name, variant): Path-to-xml}.
-    """
-    if not _docker_image_available():
-        pytest.skip(
-            f"Docker image '{DOCKER_IMAGE}' not available. "
-            f"Build with: IMAGE_NAME=oaax-intel-toolchain bash conversion-toolchain/build-toolchain.sh"
-        )
-
-    try:
-        import ultralytics  # noqa: F401
-    except ImportError:
-        pytest.skip("ultralytics not installed — run: uv sync --extra integration", allow_module_level=False)
-
-    onnx_dir = COMPILED_DIR / "onnx"
-    onnx_dir.mkdir(parents=True, exist_ok=True)
-
-    result = {}
-    for model_name in YOLO_MODELS_B4:
-        onnx = Path(download_model(model_name, str(onnx_dir)))
-        for variant, config in _CONFIGS_B4.items():
-            xml = COMPILED_DIR / model_name / variant / f"{model_name}.xml"
-            if xml.exists():
-                zip_path = xml.with_suffix(".zip")
-                if not zip_path.exists() and xml.with_suffix(".bin").exists():
-                    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                        zf.write(xml, arcname=xml.name)
-                        zf.write(xml.with_suffix(".bin"), arcname=xml.with_suffix(".bin").name)
-                result[(model_name, variant)] = xml
-                continue
-            _convert_with_docker(
-                model_name,
-                variant,
-                onnx,
-                COMPILED_DIR / model_name / variant,
-                config,
-                calibration_dir if variant in ("INT8", "INT8_NPU") else None,
-            )
-            result[(model_name, variant)] = xml
-
-    return result
+    return _compile_models([YOLOX_MODEL_U8], {"FP32_U8": _CONFIGS["FP32_U8"]}, calibration_dir)

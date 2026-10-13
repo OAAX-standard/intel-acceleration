@@ -157,7 +157,7 @@ conversion_toolchain input/model.zip output/
 # From the repo root (venv activated)
 pytest tests/test_conversion.py -v       # unit tests
 pytest tests/test_docker.py -v           # Docker image tests (image must be built)
-pytest tests/test_yolo_integration.py -v # YOLO end-to-end (requires ultralytics)
+pytest tests/test_detector_integration.py -v # YOLOX end-to-end
 ```
 
 Or use the quick test script (builds venv, checks structure, runs unit tests):

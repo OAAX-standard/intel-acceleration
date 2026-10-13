@@ -1,10 +1,10 @@
 /**
- * Integration benchmark: OAAX v2 runtime with YOLOv8n / YOLOv11n models.
+ * Integration benchmark: OAAX v2 runtime with YOLOX detection models (output [batch, anchors, 85]).
  *
  * Uses dedicated producer/consumer threads to exercise the async queue.
  *
  * Usage:
- *   ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
+ *   ./detector_test <model.zip> [device] [--runs N] [--warmup N] [--batch N]
  *               [--perf-hint latency|throughput] [--input-dtype f32|u8|f16]
  *               [--in-flight N] [--imgsz N] [--queue-limit-test]
  * Defaults: device=CPU, runs=30, warmup=5, batch=1, input-dtype=f32, in-flight=5, imgsz=640
@@ -23,8 +23,15 @@
 
 #include "oaax_runtime.h"
 
-static const int YOLO_CHANNELS = 3;
-static const int YOLO_OUT_CH = 84;  // 4 bbox + 80 COCO classes, resolution-independent
+static const int DET_CHANNELS = 3;
+static const int DET_OUT_COLS = 85;  // cx, cy, w, h, objectness + 80 COCO class scores
+
+// YOLOX anchors for a square input: one per cell on the stride-8/16/32 feature maps.
+static int expected_anchors(int imgsz) {
+    int n = 0;
+    for (int stride : {8, 16, 32}) n += (imgsz / stride) * (imgsz / stride);
+    return n;
+}
 
 static size_t dtype_byte_size(TensorElementType dtype) {
     switch (dtype) {
@@ -68,8 +75,8 @@ static void free_tensors(Tensors *t) {
     free(t);
 }
 
-static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dtype, int imgsz,
-                                const char *input_name = "images") {
+static Tensors *make_detector_input(int batch, int request_id, TensorElementType dtype, int imgsz,
+                                    const char *input_name = "images") {
     Tensors *ts = (Tensors *)malloc(sizeof(Tensors));
     if (!ts) return nullptr;
     ts->id = request_id;
@@ -86,10 +93,10 @@ static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dty
     td.rank = 4;
     td.shape = (int *)malloc(4 * sizeof(int));
     td.shape[0] = batch;
-    td.shape[1] = YOLO_CHANNELS;
+    td.shape[1] = DET_CHANNELS;
     td.shape[2] = imgsz;
     td.shape[3] = imgsz;
-    size_t n_bytes = (size_t)batch * YOLO_CHANNELS * imgsz * imgsz * dtype_byte_size(dtype);
+    size_t n_bytes = (size_t)batch * DET_CHANNELS * imgsz * imgsz * dtype_byte_size(dtype);
     td.data_size = n_bytes;
     td.data = calloc(1, n_bytes);
     if (!td.data) {
@@ -102,13 +109,13 @@ static Tensors *make_yolo_input(int batch, int request_id, TensorElementType dty
     return ts;
 }
 
-static bool validate_output(const Tensors *out, int batch) {
+static bool validate_output(const Tensors *out, int batch, int imgsz) {
     if (!out || out->num_tensors != 1) return false;
     const TensorDescriptor &td = out->tensors[0];
     if (td.rank != 3) return false;
     if (td.shape[0] != batch) return false;
-    if (td.shape[1] != YOLO_OUT_CH) return false;
-    if (td.shape[2] <= 0) return false;  // anchors vary by input resolution
+    if (td.shape[1] != expected_anchors(imgsz)) return false;
+    if (td.shape[2] != DET_OUT_COLS) return false;
     if (td.data_type != DATA_TYPE_FLOAT) return false;
     return true;
 }
@@ -137,7 +144,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
                 if (!ok) return;
                 std::this_thread::sleep_for(std::chrono::microseconds(100));
             }
-            Tensors *input = make_yolo_input(batch, i, dtype, imgsz, input_name);
+            Tensors *input = make_detector_input(batch, i, dtype, imgsz, input_name);
             if (!input) {
                 ok = false;
                 return;
@@ -171,7 +178,7 @@ static std::vector<double> run_batch(int n, std::vector<Clock::time_point> &send
             latencies[output->id] = Ms(Clock::now() - send_times[output->id]).count();
             in_flight--;
 
-            if (validate_first && i == 0 && !validate_output(output, batch)) {
+            if (validate_first && i == 0 && !validate_output(output, batch, imgsz)) {
                 std::cerr << "FAIL: unexpected output shape or type" << std::endl;
                 ok = false;
             }
@@ -240,7 +247,7 @@ int main(int argc, char **argv) {
     }
     TensorElementType input_dtype = parse_input_dtype(input_dtype_str);
 
-    std::cout << "=== OAAX YOLO Benchmark (v2) ===" << std::endl;
+    std::cout << "=== OAAX Detector Benchmark (v2) ===" << std::endl;
     std::cout << "Model     : " << model_path << std::endl;
     std::cout << "Device    : " << device << std::endl;
     std::cout << "Perf hint : " << perf_hint << std::endl;
@@ -333,8 +340,8 @@ int main(int argc, char **argv) {
 
         int rejected = 0;
         for (int i = 0; i < FLOOD; ++i) {
-            Tensors *inp = make_yolo_input(1, i, input_dtype, imgsz);
-            CHECK(inp != nullptr, "make_yolo_input returned null");
+            Tensors *inp = make_detector_input(1, i, input_dtype, imgsz);
+            CHECK(inp != nullptr, "make_detector_input returned null");
             RuntimeStatus st = runtime_enqueue_input(0, inp);
             if (st != RUNTIME_STATUS_SUCCESS) {
                 rejected++;

@@ -5,7 +5,7 @@
 # Package layout mirrors the paths stage2.py expects relative to ROOT:
 #   tests/stage2.py
 #   tests/compiled_models/<model>/<variant>/<model>.[xml,bin,zip]
-#   tests/runtime/build/yolo_test  (+ all .so files for LD_LIBRARY_PATH)
+#   tests/runtime/build/detector_test  (+ all .so files for LD_LIBRARY_PATH)
 #
 # On the remote machine:
 #   tar xzf stage2_package.tar.gz
@@ -22,8 +22,8 @@ ARCHIVE="$ROOT/stage2_package.tar.gz"
 
 # ── Sanity checks ──────────────────────────────────────────────────────────────
 
-if [ ! -f "$TEST_BUILD_DIR/yolo_test" ]; then
-    echo "ERROR: yolo_test binary not found at $TEST_BUILD_DIR/yolo_test"
+if [ ! -f "$TEST_BUILD_DIR/detector_test" ]; then
+    echo "ERROR: detector_test binary not found at $TEST_BUILD_DIR/detector_test"
     echo "       Run: bash tests/runtime/build-tests.sh"
     exit 1
 fi
@@ -46,9 +46,9 @@ cp "$ROOT/tests/stage2.py" "$OUT_DIR/tests/stage2.py"
 echo "Copying compiled models..."
 cp -r "$COMPILED_DIR" "$OUT_DIR/tests/compiled_models"
 
-echo "Copying yolo_test binary..."
-cp "$TEST_BUILD_DIR/yolo_test" "$OUT_DIR/tests/runtime/build/yolo_test"
-chmod +x "$OUT_DIR/tests/runtime/build/yolo_test"
+echo "Copying detector_test binary..."
+cp "$TEST_BUILD_DIR/detector_test" "$OUT_DIR/tests/runtime/build/detector_test"
+chmod +x "$OUT_DIR/tests/runtime/build/detector_test"
 
 echo "Copying shared libraries..."
 # Resolve symlinks so the package is self-contained

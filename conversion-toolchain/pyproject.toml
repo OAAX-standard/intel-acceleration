@@ -28,7 +28,7 @@ test = [
 integration = [
     "pytest>=7.0",
     "numpy>=1.21",
-    "ultralytics>=8.3.0",
+    "onnx>=1.12",
 ]
 all = [
     "conversion_toolchain[quantization,test,integration]",

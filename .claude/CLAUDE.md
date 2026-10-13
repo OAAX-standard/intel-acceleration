@@ -47,20 +47,20 @@ uv sync --extra integration --extra quantization
 # Python tests
 pytest tests/test_conversion.py -v
 pytest tests/test_docker.py -v           # image must be built
-pytest tests/test_yolo_integration.py -v
+pytest tests/test_detector_integration.py -v
 
 # Two-stage E2E
 python tests/stage1.py
 python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 
-# Batch-size throughput sweep (exports .pt → ONNX with explicit batch, converts to IR, benchmarks)
-python tests/benchmark_batch_sweep.py [--model yolov8n] [--device CPU] [--batches 1,2,4,8]
+# Batch-size throughput sweep (builds YOLOX ONNX with explicit batch, converts to IR, benchmarks)
+python tests/benchmark_batch_sweep.py [--model yolox_nano] [--device CPU] [--batches 1,2,4,8]
 # IR models cached in tests/compiled_models/_batch_sweep/ — re-runs skip export
 
 # C++ runtime tests (build after running build-runtimes.sh)
 bash tests/runtime/build-tests.sh
 cd tests/runtime/build && ./simple_test
-cd tests/runtime/build && ./yolo_test <model.zip> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
+cd tests/runtime/build && ./detector_test <model.zip> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
 cd tests/runtime/build && ./multi_model_test <model.zip> [model2.zip]
 ```
 
@@ -191,7 +191,7 @@ CMake requires `-DPLATFORM=X86_64 -DRUNTIME_VERSION=<ver> -DOPENVINO_DIR=<path>`
 
 | Component | Tools |
 |-----------|-------|
-| Toolchain | Python 3.10+, OpenVINO Python API, NNCF, UV, Docker |
+| Toolchain | Python 3.13+, OpenVINO Python API, NNCF, UV, Docker |
 | Runtime | C++14/17, OpenVINO C++ API, spdlog, moodycamel::ConcurrentQueue, CMake |
 | Testing | pytest + uv (Python), C++ binaries (runtime) |
 

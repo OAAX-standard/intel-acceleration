@@ -282,13 +282,23 @@ https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
 
 ---
 
-## ultralytics
+## YOLOX
 
-Source: https://github.com/ultralytics/ultralytics
-License: GNU Affero General Public License v3.0 (AGPL-3.0)
+Source: https://github.com/Megvii-BaseDetection/YOLOX
+License: Apache License 2.0
 Used by: integration tests only (not distributed with the runtime or toolchain)
 
-This component is used exclusively in the test suite (`tests/test_yolo_integration.py`,
-`tests/test_quantization_accuracy.py`) and is not bundled with or required by the
-runtime library or conversion toolchain.  The AGPL-3.0 license text is available at:
-https://www.gnu.org/licenses/agpl-3.0.txt
+The official pre-exported YOLOX ONNX models (nano, tiny, s; release 0.1.1rc0) are downloaded
+at test time and adapted in memory by `tests/models.py`. They are never committed to this
+repository or bundled with the runtime library or conversion toolchain.
+
+---
+
+## COCO images
+
+Source: https://cocodataset.org
+License: Images carry their original Flickr licenses; annotations are CC BY 4.0
+Used by: INT8 calibration and accuracy tests only (not distributed)
+
+A fixed list of 128 image ids (`tests/calibration_images.txt`) is downloaded at test time
+from images.cocodataset.org. No images are committed to this repository.

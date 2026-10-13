@@ -2,7 +2,7 @@
 """Stage 2: Benchmark and runtime validation using compiled models from Stage 1.
 
 Requires tests/compiled_models/ to be populated by stage1 first.
-Runs benchmark_app (if available) and yolo_test across all compiled models.
+Runs benchmark_app (if available) and detector_test across all compiled models.
 
 Usage:
     python tests/stage2.py [--devices CPU,GPU.0] [--duration 10]
@@ -19,33 +19,21 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))  # so `tests.models` imports when run as `python tests/stage2.py`
+
+from tests.models import TEST_MODELS  # noqa: E402  (stdlib-only module)
+
 COMPILED_DIR = ROOT / "tests" / "compiled_models"
 RUNTIME_BUILD_DIR = ROOT / "runtime-library" / "build"
 TEST_BUILD_DIR = ROOT / "tests" / "runtime" / "build"
 IS_WINDOWS = platform.system() == "Windows"
 
-# Match the models compiled by stage1 / test_yolo_integration.py.
-YOLO_MODELS = {
-    "yolov8n",
-    "yolo11n",
-    "yolo11s",
-    "yolo11n_b4",
-    "yolo11s_b4",
-    "yolo11n_320",
-    "yolo11s_320",
-    "yolo11n_320_b4",
-    "yolo11s_320_b4",
-    "yolo26s",
-    "yolo26s_320",
-    "yolo26m",
-    "yolo26m_320",
-    "yolo26s_b4",
-    "yolo26m_b2",
-}
+# Match the models compiled by stage1 / test_detector_integration.py.
+DETECTOR_MODELS = {name for name in TEST_MODELS if name.startswith("yolox")}
 
 
 def header(title: str) -> None:
@@ -56,9 +44,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--devices", default="CPU", help="Comma-separated device list (default: CPU)")
     p.add_argument("--duration", type=int, default=10, help="benchmark_app duration in seconds")
-    p.add_argument("--runs", type=int, default=300, help="yolo_test inference runs")
-    p.add_argument("--warmup", type=int, default=5, help="yolo_test warmup runs")
-    p.add_argument("--in-flight", type=int, default=5, help="max parallel in-flight requests (yolo_test --in-flight)")
+    p.add_argument("--runs", type=int, default=300, help="detector_test inference runs")
+    p.add_argument("--warmup", type=int, default=5, help="detector_test warmup runs")
+    p.add_argument(
+        "--in-flight", type=int, default=5, help="max parallel in-flight requests (detector_test --in-flight)"
+    )
     p.add_argument("--log-level", type=int, default=2, help="runtime log level: 0=trace 1=debug 2=info 3=warn 4=err")
     p.add_argument(
         "--perf-hints",
@@ -66,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated perf hints to test (default: throughput)",
     )
     p.add_argument("--csv", default="", help="Path to output CSV file")
-    p.add_argument("--skip-runtime", action="store_true", help="Skip yolo_test section")
+    p.add_argument("--skip-runtime", action="store_true", help="Skip detector_test section")
     p.add_argument("--skip-bench", action="store_true", help="Skip benchmark_app section")
     p.add_argument("--models", default="", help="Comma-separated model names to run (default: all)")
     p.add_argument(
@@ -96,17 +86,17 @@ def find_benchmark_app() -> Path | None:
     return None
 
 
-def yolo_test_path() -> Path:
+def detector_test_path() -> Path:
     if IS_WINDOWS:
-        return TEST_BUILD_DIR / "Release" / "yolo_test.exe"
-    return TEST_BUILD_DIR / "yolo_test"
+        return TEST_BUILD_DIR / "Release" / "detector_test.exe"
+    return TEST_BUILD_DIR / "detector_test"
 
 
-# ── Build yolo_test ────────────────────────────────────────────────────────────
+# ── Build detector_test ────────────────────────────────────────────────────────────
 
 
-def build_yolo_test() -> bool:
-    """Build yolo_test from tests/runtime/CMakeLists.txt. Returns True on success."""
+def build_detector_test() -> bool:
+    """Build detector_test from tests/runtime/CMakeLists.txt. Returns True on success."""
     cmake = os.environ.get("CMAKE_BIN", shutil.which("cmake") or "cmake")
     runtime_lib_dir = str(RUNTIME_BUILD_DIR / "Release") if IS_WINDOWS else str(RUNTIME_BUILD_DIR)
 
@@ -118,7 +108,7 @@ def build_yolo_test() -> bool:
             check=True,
         )
         subprocess.run(
-            [cmake, "--build", ".", "--config", "Release", "--target", "yolo_test", "-j", str(os.cpu_count() or 4)],
+            [cmake, "--build", ".", "--config", "Release", "--target", "detector_test", "-j", str(os.cpu_count() or 4)],
             cwd=TEST_BUILD_DIR,
             check=True,
         )
@@ -147,7 +137,7 @@ def build_yolo_test() -> bool:
 def get_compiled_models(
     model_filter: set[str] | None = None, precision_filter: set[str] | None = None
 ) -> list[tuple[Path, str, str]]:
-    allowed_models = model_filter or YOLO_MODELS
+    allowed_models = model_filter or DETECTOR_MODELS
     allowed_precisions = precision_filter or {"FP32", "FP16", "INT8", "INT8_NPU", "FP32_U8"}
     return [
         (zip_path, zip_path.stem, zip_path.parent.name)
@@ -215,7 +205,7 @@ def run_benchmark_app(xml: Path, device: str, duration: int, perf_hint: str = "t
     )
 
 
-def run_yolo_test(
+def run_detector_test(
     zip_path: Path,
     device: str,
     warmup: int,
@@ -228,9 +218,9 @@ def run_yolo_test(
     no_validate: bool = False,
     input_dtype: str = "f32",
 ) -> tuple | None:
-    binary = yolo_test_path()
+    binary = detector_test_path()
     if not binary.exists():
-        print(f"  [error] yolo_test binary not found: {binary}")
+        print(f"  [error] detector_test binary not found: {binary}")
         return None
     env = os.environ.copy()
     if not IS_WINDOWS:
@@ -262,7 +252,7 @@ def run_yolo_test(
         cmd,
         cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
         env=env,
-        # 600s overhead covers cold model compilation (e.g. yolo11s ~3 min uncached).
+        # 600s overhead covers cold model compilation (e.g. yolox_s ~3 min uncached).
         timeout=600 + runs * 2,
     )
     if not text or "=== Results ===" not in text:
@@ -296,7 +286,7 @@ def write_csv_row(writer, tool: str, model: str, variant: str, device: str, perf
     if writer:
         writer.writerow(
             {
-                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "tool": tool,
                 "model": model,
                 "variant": variant,
@@ -369,22 +359,20 @@ def main() -> None:
         if args.skip_runtime:
             return
 
-        # ── yolo_test ──────────────────────────────────────────────────────────
-        if not yolo_test_path().exists():
-            print(f"  yolo_test not found at {yolo_test_path()}, building...")
-            if not build_yolo_test():
+        # ── detector_test ──────────────────────────────────────────────────────────
+        if not detector_test_path().exists():
+            print(f"  detector_test not found at {detector_test_path()}, building...")
+            if not build_detector_test():
                 print("  Build failed — skipping runtime tests")
                 sys.exit(1)
 
         pass_count = fail_count = 0
         for hint in perf_hints:
-            header(f"Step 2: yolo_test  (OAAX runtime, hint={hint}, warmup={args.warmup}, runs={args.runs})")
+            header(f"Step 2: detector_test  (OAAX runtime, hint={hint}, warmup={args.warmup}, runs={args.runs})")
             print_table_header()
             for zip_path, model, variant in models:
-                batch = 4 if model.endswith("_b4") else 2 if model.endswith("_b2") else 1
-                imgsz = 320 if "_320" in model else 640
-                # yolo26 models have a non-standard [batch,300,6] output; skip the shape check
-                no_validate = model.startswith("yolo26")
+                batch, _, imgsz, _ = TEST_MODELS[model]["input_shape"]
+                no_validate = False
                 # Match the input dtype baked into the IR by the toolchain:
                 # INT8/INT8_NPU → u8, FP16 → f16, FP32_U8 → u8 (u8 with ÷255 baked in), FP32 → f32
                 if variant in ("INT8", "INT8_NPU", "FP32_U8"):
@@ -394,7 +382,7 @@ def main() -> None:
                 else:
                     input_dtype = "f32"
                 for device in devices:
-                    r = run_yolo_test(
+                    r = run_detector_test(
                         zip_path,
                         device,
                         args.warmup,
@@ -409,7 +397,7 @@ def main() -> None:
                     )
                     if r:
                         print(_ROW.format(model, variant, device, *r))
-                        write_csv_row(csv_writer, "yolo_test", model, variant, device, hint, r)
+                        write_csv_row(csv_writer, "detector_test", model, variant, device, hint, r)
                         pass_count += 1
                     else:
                         print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")

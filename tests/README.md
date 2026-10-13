@@ -6,7 +6,7 @@ End-to-end and unit tests for the Intel acceleration runtime and conversion tool
 
 ## Prerequisites
 
-- Python 3.10+, [uv](https://github.com/astral-sh/uv)
+- Python 3.13+, [uv](https://github.com/astral-sh/uv)
 - Docker (for toolchain tests) — build the image first:
   ```bash
   IMAGE_NAME=oaax-intel-toolchain bash conversion-toolchain/build-toolchain.sh
@@ -38,8 +38,8 @@ pytest tests/test_conversion.py -v
 # Docker image tests
 pytest tests/test_docker.py -v
 
-# YOLO integration tests (convert + infer via Python API)
-pytest tests/test_yolo_integration.py -v
+# YOLOX integration tests (convert + infer via Python API)
+pytest tests/test_detector_integration.py -v
 ```
 
 ---
@@ -48,7 +48,7 @@ pytest tests/test_yolo_integration.py -v
 
 ### Stage 1 — convert models to OpenVINO IR
 
-Runs conversion unit tests and compiles YOLO models. Output lands in `tests/compiled_models/`.
+Runs conversion unit tests and compiles YOLOX models (nano / tiny / s; native, 320x320 and batch=4 variants). Output lands in `tests/compiled_models/`.
 
 ```bash
 python tests/stage1.py
@@ -92,12 +92,12 @@ Key env vars for `run_stage2.sh`:
 | `DEVICES` | `CPU` | Space or comma-separated device list |
 | `PERF_HINTS` | `throughput` | `latency` / `throughput` / `cumulative_throughput` |
 | `PRECISIONS` | `INT8` | `FP32`, `FP16`, `INT8` |
-| `MODELS` | `yolo26s_320` | Space-separated model name filter (empty = all) |
+| `MODELS` | `yolox_nano_320` | Space-separated model name filter (empty = all) |
 | `RUNS` | `2000` | Inference runs per config |
 | `WARMUP` | `100` | Warm-up runs before measurement |
 | `CSV` | _(none)_ | Path to write CSV results |
 | `SKIP_BENCH` | `0` | Set `1` to skip `benchmark_app` section |
-| `SKIP_RUNTIME` | `0` | Set `1` to skip `yolo_test` section |
+| `SKIP_RUNTIME` | `0` | Set `1` to skip `detector_test` section |
 
 ---
 
@@ -111,27 +111,36 @@ bash tests/runtime/build-tests.sh
 # Smoke test (no model required)
 ./tests/runtime/build/simple_test
 
-# YOLO inference test
-./tests/runtime/build/yolo_test <model.zip> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
+# Detector inference test (INT8 IRs take u8 input, FP16 take f16 — pass --input-dtype; --imgsz 416 for nano/tiny)
+./tests/runtime/build/detector_test <model.zip> [device] [--runs N] [--warmup N] [--imgsz N] [--input-dtype f32|u8|f16] [--perf-hint latency|throughput]
 
 # Multi-model test
-./tests/runtime/build/multi_model_test <model1.zip> [model2.zip]
+./tests/runtime/build/multi_model_test <model1.zip> [model2.zip] [--imgsz N]
 ```
 
 ---
 
 ## Batch-size throughput sweep
 
-Exports a `.pt` model → ONNX at each batch size, converts to IR, and benchmarks.
-Compiled IR models are cached in `tests/compiled_models/_batch_sweep/` — re-runs skip re-export.
+Builds the official YOLOX ONNX at each batch size, converts to IR, and benchmarks.
+Compiled IR models are cached in `tests/compiled_models/_batch_sweep/` — re-runs skip the build.
 
 ```bash
 python tests/benchmark_batch_sweep.py \
-  --model yolov8n \
+  --model yolox_nano \
   --device CPU \
   --batches 1,2,4,8 \
   --runs 100 \
   --duration 15
 ```
 
-The `.pt` file must exist in the repo root (e.g. `yolov8n.pt`).
+`--model` is one of `yolox_nano`, `yolox_tiny`, `yolox_s`.
+
+---
+
+## Test models
+
+Detector tests use the official [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) ONNX models (Apache-2.0), downloaded
+and SHA-256-verified on first use, then adapted by `tests/models.py` to the batch size and resolution a test needs.
+Calibration uses 128 COCO images listed in `tests/calibration_images.txt`. Nothing is committed; no AGPL-licensed
+models or packages are used.
