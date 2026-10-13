@@ -58,6 +58,10 @@ python tests/stage1.py
 
 Requires `tests/compiled_models/` to be populated by Stage 1.
 
+Stage 2 builds all C++ test binaries, benchmarks every compiled model with `detector_test`, then runs the runtime API
+tests (`simple_test`, `lifecycle_test`, `output_validation_test`, `multi_model_test`) against `yolox_nano`/`yolox_tiny`
+FP32. It exits non-zero if any of them fails.
+
 **Quick run (defaults):**
 
 ```bash

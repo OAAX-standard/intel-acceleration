@@ -80,7 +80,7 @@ Throughput hint, batch=1, 100 runs / 15s per config.
 
 Note: `benchmark_app -d GPU` does NOT use MULTI — it routes to fastest single GPU.
 
-### yolo_test (with H2D/D2H per inference; GPU = our MULTI auto-detection)
+### detector_test (with H2D/D2H per inference; GPU = our MULTI auto-detection)
 
 | Model | Prec | CPU | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU (MULTI) |
 |-------|------|-----|--------------|--------------|-------------|
@@ -95,20 +95,15 @@ Note: `benchmark_app -d GPU` does NOT use MULTI — it routes to fastest single 
 - **H2D/D2H gap** on single iGPU: ~9-13% (higher at INT8 speeds); dGPU gap is lost in noise
 - **stage2.py regex bug** fixed (commit af3d9279): `Avg latency:` pattern updated
 
-## Debug profiler
-
-`runtime_profiler.hpp` — enabled with `OAAX_PROFILE=1` (auto-set for Debug builds).
-Reports per-stage breakdown (input_wait, slot_wait, pool_wait, tensor_setup, inference, output_queue) in µs/inference on `runtime_destruction()`.
-Zero overhead in Release builds.
-
-## yolo_test CLI
+## detector_test CLI
 
 ```
-./yolo_test <model.xml> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput|cumulative_throughput]
+./detector_test <model.zip> [device] [--runs N] [--warmup N] [--batch N] [--imgsz N] [--in-flight N]
+                [--input-dtype f32|u8|f16] [--perf-hint latency|throughput|cumulative_throughput]
 ```
 
-Uses `max_in_flight=5` hardcoded. Calls `runtime_return_output()` (not `deep_free_tensors_struct`) to return pool buffers.
-Average latency is skewed by queue depth with 1 infer slot — use **min latency** and **throughput** as the meaningful metrics.
+INT8 IRs take u8 input and FP16 IRs take f16 (the toolchain bakes the boundary type) — pass `--input-dtype` or the runtime rejects the tensor. Output is validated as `[batch, anchors, 85]` (YOLOX).
+Average latency is skewed by queue depth when several requests are in flight — use **min latency** and **throughput** as the meaningful metrics.
 
 ## CI gotchas on `oaax-v2` (2026-08-05)
 

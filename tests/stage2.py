@@ -86,17 +86,24 @@ def find_benchmark_app() -> Path | None:
     return None
 
 
-def detector_test_path() -> Path:
+TEST_BINARIES = ("simple_test", "detector_test", "multi_model_test", "output_validation_test", "lifecycle_test")
+
+
+def test_binary_path(name: str) -> Path:
     if IS_WINDOWS:
-        return TEST_BUILD_DIR / "Release" / "detector_test.exe"
-    return TEST_BUILD_DIR / "detector_test"
+        return TEST_BUILD_DIR / "Release" / f"{name}.exe"
+    return TEST_BUILD_DIR / name
 
 
-# ── Build detector_test ────────────────────────────────────────────────────────────
+def detector_test_path() -> Path:
+    return test_binary_path("detector_test")
 
 
-def build_detector_test() -> bool:
-    """Build detector_test from tests/runtime/CMakeLists.txt. Returns True on success."""
+# ── Build the C++ test binaries ────────────────────────────────────────────────
+
+
+def build_test_binaries() -> bool:
+    """Build every C++ test from tests/runtime/CMakeLists.txt. Returns True on success."""
     cmake = os.environ.get("CMAKE_BIN", shutil.which("cmake") or "cmake")
     runtime_lib_dir = str(RUNTIME_BUILD_DIR / "Release") if IS_WINDOWS else str(RUNTIME_BUILD_DIR)
 
@@ -108,7 +115,7 @@ def build_detector_test() -> bool:
             check=True,
         )
         subprocess.run(
-            [cmake, "--build", ".", "--config", "Release", "--target", "detector_test", "-j", str(os.cpu_count() or 4)],
+            [cmake, "--build", ".", "--config", "Release", "-j", str(os.cpu_count() or 4)],
             cwd=TEST_BUILD_DIR,
             check=True,
         )
@@ -271,6 +278,56 @@ def run_detector_test(
     return result
 
 
+# ── Runtime API tests (lifecycle, output validation, multi-model, smoke) ───────
+
+
+def run_cpp_test(name: str, args: list[str], timeout: int = 600) -> bool:
+    """Run one C++ test binary; it passes iff it exits 0. Output is shown only on failure."""
+    binary = test_binary_path(name)
+    if not binary.exists():
+        print(f"  {name:<24} FAILED (binary not found: {binary})")
+        return False
+    env = os.environ.copy()
+    if not IS_WINDOWS:
+        env["LD_LIBRARY_PATH"] = f"{TEST_BUILD_DIR}:{env.get('LD_LIBRARY_PATH', '')}"
+    try:
+        r = subprocess.run(
+            [str(binary), *args],
+            capture_output=True,
+            text=True,
+            cwd=binary.parent,  # run from binary dir so DLLs are found on Windows
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  {name:<24} FAILED (timeout after {timeout}s)")
+        return False
+    if r.returncode != 0:
+        print(f"  {name:<24} FAILED (exit {r.returncode})")
+        print("\n".join((r.stdout + r.stderr).splitlines()[-15:]))
+        return False
+    print(f"  {name:<24} passed")
+    return True
+
+
+def run_runtime_api_tests() -> tuple[int, int]:
+    """Run the runtime-API tests against small FP32 models. Returns (passed, failed)."""
+    nano = COMPILED_DIR / "yolox_nano" / "FP32" / "yolox_nano.zip"
+    tiny = COMPILED_DIR / "yolox_tiny" / "FP32" / "yolox_tiny.zip"
+    imgsz = str(TEST_MODELS["yolox_nano"]["input_shape"][2])  # nano and tiny share their input size
+    tests = [("simple_test", [])]
+    if nano.exists() and tiny.exists():
+        tests += [
+            ("lifecycle_test", [str(nano), "--imgsz", imgsz]),
+            ("output_validation_test", [str(nano), "CPU", "--runs", "20", "--imgsz", imgsz]),
+            ("multi_model_test", [str(nano), str(tiny), "--imgsz", imgsz]),
+        ]
+    else:
+        print("  yolox_nano/yolox_tiny FP32 not compiled — running simple_test only")
+    results = [run_cpp_test(name, args) for name, args in tests]
+    return results.count(True), results.count(False)
+
+
 # ── Formatting ─────────────────────────────────────────────────────────────────
 
 _HDR = "  {:<10}  {:<6}  {:<8}  {:>8}  {:>8}  {:>8}  {:>12}"
@@ -360,9 +417,9 @@ def main() -> None:
             return
 
         # ── detector_test ──────────────────────────────────────────────────────────
-        if not detector_test_path().exists():
-            print(f"  detector_test not found at {detector_test_path()}, building...")
-            if not build_detector_test():
+        if not all(test_binary_path(n).exists() for n in TEST_BINARIES):
+            print(f"  test binaries not all present in {TEST_BUILD_DIR}, building...")
+            if not build_test_binaries():
                 print("  Build failed — skipping runtime tests")
                 sys.exit(1)
 
@@ -402,6 +459,11 @@ def main() -> None:
                     else:
                         print(f"  {model:<10}  {variant:<6}  {device:<8}  FAILED")
                         fail_count += 1
+
+        header("Step 3: runtime API tests  (simple / lifecycle / output validation / multi-model)")
+        api_pass, api_fail = run_runtime_api_tests()
+        pass_count += api_pass
+        fail_count += api_fail
 
         header("Stage 2 results")
         if args.csv:

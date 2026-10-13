@@ -51,12 +51,12 @@ remaining ~9% INT8 gap vs `benchmark_app` (which reads tensors in-place) is enti
 Closing it would require a "borrow" ownership model in tensors_struct (caller borrows pointer,
 doesn't free it), which is a breaking API change.
 
-## benchmark_app vs yolo_test latency numbers are not comparable
+## benchmark_app vs detector_test latency numbers are not comparable
 
 `benchmark_app -hint throughput` reports latency-at-max-throughput with multiple parallel requests
-(high avg_ms). `yolo_test` with `max_in_flight=10` also queues requests — avg_ms reflects queue
+(high avg_ms). `detector_test` with `max_in_flight=10` also queues requests — avg_ms reflects queue
 depth, not single-request latency. Use `benchmark_app -hint latency` or
-`yolo_test --num-requests 1 --perf-hint latency` for true per-request latency.
+`detector_test --num-requests 1 --perf-hint latency` for true per-request latency.
 
 ## POSIX sem_t + per-slot state
 

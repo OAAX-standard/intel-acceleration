@@ -94,6 +94,12 @@ The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_out
 - **Windows integration job simplified:** removed the OpenVINO install step from
   `integration-tests-windows`; test binaries now link only against the downloaded
   `RuntimeLibrary.lib` without needing the full OpenVINO SDK on the runner.
+- **All C++ tests now run in CI:** Stage 2 builds every test binary and, after the detector benchmarks,
+  runs `simple_test`, `lifecycle_test` (repeated init/load/cleanup — the `ov::shutdown()` regression guard),
+  `output_validation_test` and `multi_model_test`; any failure fails the job. Previously only the detector
+  benchmark ran. `simple_test` no longer uses a GCC-only attribute, so it builds with MSVC.
+- Removed the dead `OAAX_PROFILE` build flag (the profiler no longer exists) from `build-runtimes.sh` and
+  `deploy.sh`; `.gitignore` now covers runtime logs, compile caches, weights and Python caches.
 
 ### Fixed
 

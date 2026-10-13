@@ -28,8 +28,7 @@
         if (!(cond)) FAIL(msg); \
     } while (0)
 
-static void free_tensors(Tensors *t) __attribute__((unused));
-static void free_tensors(Tensors *t) {
+[[maybe_unused]] static void free_tensors(Tensors *t) {
     if (!t) return;
     for (int i = 0; i < t->num_tensors; ++i) {
         free(t->tensors[i].name);

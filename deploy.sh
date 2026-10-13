@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# deploy.sh — build (optionally with profiling) and copy the runtime library
-#             to the local inference engine directory.
+# deploy.sh — build and copy the runtime library to a local inference engine directory.
 #
 # Usage:
-#   bash deploy.sh --dest <path> [--profile]
-#   OAAX_DEPLOY_DEST=<path> bash deploy.sh [--profile]
+#   bash deploy.sh --dest <path>
+#   OAAX_DEPLOY_DEST=<path> bash deploy.sh
 #
 # Options:
-#   --profile   Build with OAAX_PROFILE=ON (per-request timing logs)
 #   --dest      Destination directory (or set OAAX_DEPLOY_DEST); required
 
 set -euo pipefail
@@ -15,13 +13,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${ROOT}/runtime-library/build"
 DEST="${OAAX_DEPLOY_DEST:-}"
-PROFILE=0
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dest) DEST="$2"; shift 2 ;;
-        --profile) PROFILE=1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -41,12 +37,7 @@ CMAKE_ARGS=(
     "-DRUNTIME_VERSION=${RUNTIME_VERSION}"
     "-DOPENVINO_DIR=${OPENVINO_DIR}"
 )
-if [[ "${PROFILE}" == "1" ]]; then
-    CMAKE_ARGS+=("-DOAAX_PROFILE=ON")
-    echo "=== Building with OAAX_PROFILE=ON ==="
-else
-    echo "=== Building runtime library ==="
-fi
+echo "=== Building runtime library ==="
 
 cmake "${ROOT}/runtime-library" "${CMAKE_ARGS[@]}" -B "${BUILD_DIR}"
 cmake --build "${BUILD_DIR}" -j "$(nproc)"

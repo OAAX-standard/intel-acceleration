@@ -12,3 +12,15 @@ tests/test_models/
 build
 cmake-build-debug
 .idea
+
+# Runtime logs and OpenVINO compile caches written to the CWD when running tests/benchmarks
+runtime*.log
+*.blob
+
+# Model weights, packaged stage-2 bundles, Python caches
+*.pt
+*.pth
+stage2_package/
+stage2_package.tar.gz
+__pycache__/
+.venv/
