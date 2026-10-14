@@ -43,7 +43,7 @@ assignees: ''
 - **Device:** (e.g. CPU, GPU.0 Intel UHD 770, NPU)
 - **Runtime version:** (output of `runtime_version()` or from `VERSION` file)
 - **OpenVINO version:** (e.g. 2026.1.0)
-- **Model:** (e.g. yolo11n FP32)
+- **Model:** (e.g. yolox_s FP32)
 - **perf_hint:** (e.g. latency / throughput)
 
 ## Additional context

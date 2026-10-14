@@ -6,6 +6,130 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.0] - 2026-04-19
+
+### Runtime Library — OAAX v2 Interface
+
+Breaking change: the runtime now implements the OAAX v2 standard interface (`oaax_runtime.h`).
+The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_output`,
+`runtime_return_output`, `runtime_destruction`) are replaced by the new API.
+
+**New public header:** `oaax_runtime.h` replaces `runtime_core.hpp` and `tensors_struct.h`.
+
+**New types:**
+- `TensorDescriptor` — array-of-structs layout (name, data_type, rank, shape, data_size, data
+  co-located per tensor for cache locality); replaces the struct-of-arrays `tensors_struct`
+- `Tensors` — wraps an array of `TensorDescriptor` plus a caller-assigned `id` for request correlation
+- `TensorElementType` — expanded enum: adds `DATA_TYPE_FLOAT16`, `DATA_TYPE_BFLOAT16`,
+  `DATA_TYPE_INT4`, `DATA_TYPE_UINT4`, and other ONNX-aligned types
+- `Config` / `ModelConfig` — key-value configuration structs for init and per-model settings
+- `RuntimeStatus` — fine-grained status codes (18 values) replacing int return codes
+
+**New API functions:**
+- `runtime_init(Config)` — initialize with key-value config
+- `runtime_load_models(n, ModelConfig[])` — load N models in one call; each model can override
+  `device_type`, `perf_hint`, `cache_dir` from the global config; returns `ALREADY_INITIALIZED`
+  if called twice (requires `runtime_cleanup()` first)
+- `runtime_enqueue_input(model_id, Tensors*)` — enqueue to a specific model; runtime takes
+  ownership on success, caller frees on failure
+- `runtime_retrieve_output(int *model_id, Tensors**, timeout_ms)` — dequeue from the global
+  output queue (any model); fills `*model_id`; `timeout_ms=0` non-blocking, `<0` block forever,
+  `>0` timed wait via `sem_timedwait` (Linux) / `WaitForSingleObject` (Windows)
+- `runtime_cleanup()` — idempotent teardown
+- `runtime_get_error()` — returns last error string or NULL
+- `runtime_get_info()` — returns JSON diagnostics (loaded_models, requests_in_flight,
+  backend_version, active_device)
+
+**Architecture changes:**
+- Per-model manager thread and infer-request pool; global output semaphore for blocking retrieve
+- Standard `malloc`/`free` per output (output buffer pool removed per v2 spec)
+- Callbacks capture `(model_id, slot_idx)` — one registration per slot at load time
+
+**Benchmark results (Intel Core i7-12700K, CPU, batch=1, 300 runs):**
+
+| Model | Precision | benchmark_app | OAAX v2 runtime | Delta |
+|-------|-----------|--------------|-----------------|-------|
+| yolo11n | FP32 | ~99 FPS | ~93 FPS | -6% |
+| yolo11n | INT8 | ~238 FPS | ~223 FPS | -6% |
+| yolov8n | FP32 | ~84 FPS | ~82 FPS | -2% |
+| yolov8n | INT8 | ~235 FPS | ~223 FPS | -5% |
+| yolo11s | FP32 | ~33 FPS | ~33 FPS | 0% |
+| yolo11s | INT8 | ~99 FPS | ~98 FPS | -1% |
+
+### Conversion Toolchain
+
+- **`batch_size` parameter:** `config.json` now accepts `advanced.batch_size` (default `1`).
+  For models without hardcoded internal batch constants (e.g. ResNet, MobileNet), the toolchain
+  uses a probe-then-reconvert approach (`ov.convert_model(..., input=input_specs)`) so the batch
+  dimension propagates through the full graph. YOLO models require re-export from PyTorch with the
+  target batch size (standard Ultralytics exports have hardcoded DFL reshape constants that prevent
+  post-hoc rebatching); attempting batch > 1 on a standard YOLO ONNX raises a clear `RuntimeError`
+  with a re-export hint.
+- **INT8 batch > 1 calibration fix:** `CalibrationDataLoader` now tiles each calibration sample to
+  match the model's fixed batch dimension (`np.repeat`) so NNCF receives correctly-shaped tensors.
+  Previously, INT8 quantization of a batch=4 model would immediately fail with a shape mismatch.
+
+### Testing
+
+- **Batch=4 CI pipeline** (`yolo11n_b4`, `yolo11s_b4`): YOLO models are re-exported from
+  PyTorch with `batch=4` and converted in FP32, FP16, and INT8 variants. 26 new integration
+  tests cover IR file presence, OpenVINO loading, output shape `[4, 84, 8400]`, numerical
+  sanity, and INT8 size regression.
+- **`multi_model_test`:** new C++ test binary that loads two models concurrently, enqueues
+  inputs to both, and validates that outputs from each model are correctly identified by
+  `model_id`. Exercises the OAAX v2 multi-model async dispatch path.
+- **C++ test build decoupled from runtime build:** test binaries (`simple_test`, `yolo_test`,
+  `multi_model_test`) now have their own `tests/runtime/CMakeLists.txt` and
+  `tests/runtime/build-tests.sh`, linking against the prebuilt `libRuntimeLibrary.so`.
+  The `runtime-library/` CMake no longer builds test executables.
+- **`stage2.py --perf-hints`:** accepts a comma-separated list of performance hints
+  (e.g. `latency,throughput`) and runs each section for all hint/device/model combinations.
+  Adds `perf_hint` column to CSV output.
+- **`stage2.py` benchmark_app timeout fix:** timeout changed from `duration * 4` to
+  `120 + duration * 4` to cover GPU JIT compilation overhead before measurement starts
+  (prevents false timeouts for batch=4 models on GPU with short `--duration` values).
+
+### CI
+
+- **Windows integration job simplified:** removed the OpenVINO install step from
+  `integration-tests-windows`; test binaries now link only against the downloaded
+  `RuntimeLibrary.lib` without needing the full OpenVINO SDK on the runner.
+- **All C++ tests now run in CI:** Stage 2 builds every test binary and, after the detector benchmarks,
+  runs `simple_test`, `lifecycle_test` (repeated init/load/cleanup — the `ov::shutdown()` regression guard),
+  `output_validation_test` and `multi_model_test`; any failure fails the job. Previously only the detector
+  benchmark ran. `simple_test` no longer uses a GCC-only attribute, so it builds with MSVC.
+- Removed the dead `OAAX_PROFILE` build flag (the profiler no longer exists) from `build-runtimes.sh` and
+  `deploy.sh`; `.gitignore` now covers runtime logs, compile caches, weights and Python caches.
+- `detector_test` defaults its in-flight depth to the runtime's infer-request count (was a fixed 5, which
+  halved the measured throughput of fast INT8 models on many-core CPUs); `stage2.py --in-flight 0` means auto.
+
+### Fixed
+
+- **Runtime:** Model loading no longer crashes on VMs (e.g. QEMU) that do not expose the `pclmulqdq`
+  CPU instruction. OpenVINO requires this instruction for CRC hashing when the compiled-model cache
+  is active. The runtime now catches the exception, disables caching globally for the session, and
+  retries compilation on the same device — transparent to the caller and requiring no config change.
+
+### Test suite licensing
+
+- **Tests: AGPL-licensed models and dependencies removed.** The test suite no longer uses
+  `ultralytics` (AGPL-3.0) or any Ultralytics model (YOLOv8/11/12/26). Detector tests now use the
+  official [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) ONNX models (Apache-2.0: nano, tiny, s),
+  downloaded and SHA-256-verified at test time. `tests/models.py` adapts them to the batch size and
+  resolution a test needs; batch=4 output is verified identical to four batch=1 runs.
+- Calibration images now come from a fixed list of 128 COCO ids (`tests/calibration_images.txt`) fetched
+  from cocodataset.org instead of the Ultralytics `coco128` bundle.
+- Renamed `tests/runtime/yolo_test.cpp` → `detector_test.cpp` and `tests/test_yolo_integration.py` →
+  `test_detector_integration.py`; detector output is now validated as `[batch, anchors, 85]`.
+  `multi_model_test` gained `--imgsz`.
+- Dropped the YOLO26 test groups (their post-processed `[batch, 300, 6]` head has no YOLOX equivalent).
+- The `integration` extra now installs `onnx` instead of `ultralytics`; `torch`/`torchvision` are no longer
+  pulled in. The root project's `requires-python` is now `>=3.13`, matching the conversion toolchain
+  (the old `>=3.10` made `uv lock` fail as soon as any dependency changed).
+- `ThirdPartyNotices.txt`: removed the ultralytics entry; added YOLOX and COCO.
+
+---
+
 ## [1.3.2] - 2026-04-15
 
 ### Runtime Library

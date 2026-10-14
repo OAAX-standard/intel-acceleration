@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import openvino as ov
+from openvino.preprocess import PrePostProcessor
 
 from .config import OptimizationConfig
 from .quantization import is_nncf_available, quantize_model
@@ -153,6 +154,70 @@ def extract_input_bundle(input_zip: str, extract_dir: str, logs=None) -> tuple[s
     return onnx_path, config_path, calibration_dir
 
 
+_DTYPE_MAP = {
+    "u8": ov.Type.u8,
+    "f16": ov.Type.f16,
+    "f32": ov.Type.f32,
+}
+
+
+def apply_preprocessing(model: ov.Model, config: OptimizationConfig, logs) -> ov.Model:
+    """Bake input dtype conversion, mean subtraction, and scale division into the model graph."""
+    if not config.has_preprocessing():
+        return model
+
+    input_dtype = config.get_preprocessing_input_dtype()
+    mean_values = config.get_mean_values()
+    scale_values = config.get_scale_values()
+    caller_type = _DTYPE_MAP.get(input_dtype) if input_dtype else None
+
+    ppp = PrePostProcessor(model)
+    for i in range(len(model.inputs)):
+        model_type = model.input(i).get_element_type()
+        inp = ppp.input(i)
+
+        if caller_type is not None:
+            inp.tensor().set_element_type(caller_type)
+
+        # Per-channel mean/scale require a layout so OpenVINO knows which dim is C.
+        # Auto-set based on input rank: 4D → NCHW, 3D → CHW.
+        needs_layout = (isinstance(mean_values, list) and len(mean_values) > 1) or (
+            isinstance(scale_values, list) and len(scale_values) > 1
+        )
+        if needs_layout:
+            rank = len(model.input(i).get_partial_shape())
+            layout_map = {4: ov.Layout("NCHW"), 3: ov.Layout("CHW")}
+            if rank in layout_map:
+                inp.model().set_layout(layout_map[rank])
+
+        steps = inp.preprocess()
+
+        # Mean/scale ops require f32; insert a cast if the caller type isn't f32
+        if caller_type is not None and caller_type != ov.Type.f32 and (mean_values or scale_values):
+            steps.convert_element_type(ov.Type.f32)
+
+        if mean_values:
+            steps.mean(mean_values)
+
+        if scale_values:
+            steps.scale(scale_values)
+
+        # Convert to the model's original element type if it differs from f32
+        if model_type != ov.Type.f32:
+            steps.convert_element_type(model_type)
+
+    model = ppp.build()
+    logs.add_message(
+        "Preprocessing baked into model",
+        {
+            "input_dtype": input_dtype or "(unchanged)",
+            "mean_values": mean_values,
+            "scale_values": scale_values,
+        },
+    )
+    return model
+
+
 def convert_to_ir(
     onnx_path: str, output_dir: str, logs, config: OptimizationConfig | None = None, calibration_dir: str | None = None
 ):
@@ -199,9 +264,37 @@ def convert_to_ir(
 
         logs.add_message("Converting ONNX model to OpenVINO IR format")
 
-        # Load and convert the ONNX model using OpenVINO
+        batch_size = config.get_batch_size()
+
+        # Load and convert the ONNX model using OpenVINO.
+        # For batch_size > 1 we probe the default conversion to get input names/shapes,
+        # then re-convert with explicit batch-sized inputs so the batch dim propagates
+        # through the entire graph (including internal Reshape constants that post-hoc
+        # reshape/set_batch cannot update).
         try:
-            model = ov.convert_model(onnx_path)
+            if batch_size == 1:
+                model = ov.convert_model(onnx_path)
+            else:
+                probe = ov.convert_model(onnx_path)
+                input_specs = []
+                for inp in probe.inputs:
+                    ps = inp.partial_shape
+                    new_shape = [batch_size] + [
+                        ps[i].get_length() if ps[i].is_static else -1 for i in range(1, len(ps))
+                    ]
+                    input_specs.append((inp.any_name, new_shape))
+                try:
+                    model = ov.convert_model(onnx_path, input=input_specs)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"batch_size={batch_size} conversion failed. "
+                        "The ONNX model likely has hardcoded batch=1 constants in its post-processing. "
+                        "Re-export the model from PyTorch with the desired batch size and try again. "
+                        f"Original error: {e}"
+                    ) from e
+                logs.add_message("Batch size set", {"batch_size": batch_size})
+        except RuntimeError:
+            raise
         except Exception as e:
             error_msg = f"Failed to convert ONNX model: {str(e)}"
             logs.add_message(
@@ -212,7 +305,44 @@ def convert_to_ir(
 
         logs.add_message("Successfully converted to OpenVINO IR format")
 
+        # Make batch dimension dynamic if requested
+        if config.is_dynamic_batch():
+            shapes = {}
+            for inp in model.inputs:
+                ps = inp.get_partial_shape()
+                shapes[inp.any_name] = ov.PartialShape([ov.Dimension(-1)] + [ps[i] for i in range(1, len(ps))])
+            model.reshape(shapes)
+            logs.add_message("Batch dimension set to dynamic (-1)")
+
+        # Auto-apply input dtype when none is explicitly configured, so the
+        # compiled IR's input boundary matches the model's precision tier and
+        # callers always send the right dtype without guessing.
+        if config.get_preprocessing_input_dtype() is None:
+            if config.is_quantization_enabled():
+                # INT8: bake u8 input + ÷255 so callers feed raw pixels.
+                # NNCF then calibrates against the same distribution.
+                input_ps = model.input(0).get_partial_shape()
+                num_channels = input_ps[1].get_length() if len(input_ps) >= 2 and input_ps[1].is_static else 3
+                config = config.with_u8_preprocessing([255.0] * num_channels)
+                logs.add_message(
+                    "Auto-applying u8 input preprocessing for INT8 model",
+                    {"scale_values": [255.0] * num_channels},
+                )
+            elif config.get_fp16_compression():
+                # FP16: bake f16 input so callers feed half-precision tensors.
+                config = config.with_input_dtype("f16")
+                logs.add_message("Auto-applying f16 input dtype for FP16 model")
+
+        # Bake preprocessing (dtype conversion, mean, scale) into the graph before quantization
+        # so NNCF calibrates against the same input format used at inference time.
+        model = apply_preprocessing(model, config, logs)
+
         # Apply quantization if enabled
+        if config.is_quantization_enabled() and config.is_dynamic_batch():
+            logs.add_message(
+                "Warning: dynamic_batch=true with quantization — NNCF requires static shapes; "
+                "quantization will proceed with batch=1 calibration data"
+            )
         if config.is_quantization_enabled():
             if not is_nncf_available():
                 logs.add_message("Warning: NNCF not available, skipping quantization")
@@ -232,6 +362,8 @@ def convert_to_ir(
                     preset=config.get_quantization_preset(),
                     subset_size=config.get_quantization_subset_size(),
                     logs=logs,
+                    input_dtype=config.get_preprocessing_input_dtype() or "f32",
+                    target_device=config.get_quantization_target_device(),
                 )
 
         # Generate output paths
@@ -247,8 +379,13 @@ def convert_to_ir(
             xml_path = temp_path / f"{model_name}.xml"
             bin_path = temp_path / f"{model_name}.bin"
 
-            # Save the model in IR format with FP16 compression setting
+            # FP16 compression is meaningless for INT8-quantized models — their
+            # weights are already INT8, and compressing remaining constants to
+            # FP16 would interfere with the quantized representation.
             compress_fp16 = config.get_fp16_compression()
+            if config.is_quantization_enabled() and compress_fp16:
+                compress_fp16 = False
+                logs.add_message("FP16 compression disabled for INT8 model")
 
             logs.add_message(
                 "Saving model to IR format",

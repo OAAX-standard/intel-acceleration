@@ -13,8 +13,6 @@ set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(DEPS_DIR ${CMAKE_CURRENT_LIST_DIR}/deps)
 set(SPDLOG_DIR ${DEPS_DIR}/spdlog)
 set(CONCURRENT_QUEUE_DIR ${DEPS_DIR}/concurrentqueue)
-set(TOOLS_C_UTILITIES_DIR ${DEPS_DIR}/tools/c-utilities)
-set(TOOLS_C_UTILITIES_INCLUDE_DIR ${DEPS_DIR}/tools/c-utilities/include)
 set(MINIZ_DIR ${DEPS_DIR}/miniz)
 
 # === OpenVINO Configuration ===
@@ -118,7 +116,16 @@ if(NOT MSVC)
   # (_GLIBCXX_USE_CXX11_ABI=1, the default). Do NOT force the old ABI here —
   # doing so would mangle std::string differently and cause ov:: symbol mismatches.
   set(CMAKE_C_FLAGS " ${CMAKE_C_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include")
-  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
+  # Unloadability (dlclose must actually unmap the runtime so it can be
+  # hot-swapped; the Windows analogue is FreeLibrary releasing the DLL file):
+  # - -fno-gnu-unique: STB_GNU_UNIQUE symbols (template statics in spdlog/
+  #   fmt/moodycamel) make glibc permanently refuse to unload the DSO.
+  # - -fvisibility=hidden/-fvisibility-inlines-hidden: only OAAX_EXPORT
+  #   symbols are exported. Without this, NODELETE libraries (libstdc++,
+  #   libopenvino) bind vague-linkage symbols to our copies during group
+  #   relocation ("relocation dependency"), transitively pinning this
+  #   library in the process forever.
+  set(CMAKE_CXX_FLAGS " ${CMAKE_CXX_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions -fno-gnu-unique -fvisibility=hidden -fvisibility-inlines-hidden")
   set(CMAKE_CPP_FLAGS " ${CMAKE_CPP_FLAGS} ${CMAKE_BUILD_FLAGS} -D_GNU_SOURCE -I${CROSS_ROOT}/include -fexceptions")
 endif()
 
@@ -129,9 +136,6 @@ set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_BUILD_FLAGS}")
 
 # Add spdlog for logging
 add_subdirectory(${SPDLOG_DIR} ${CMAKE_CURRENT_BINARY_DIR}/spdlog)
-
-# Add c-utilities
-add_subdirectory(${TOOLS_C_UTILITIES_DIR} ${CMAKE_CURRENT_BINARY_DIR}/c_utilities)
 
 # === Source Files ===
 file(GLOB_RECURSE SRC
@@ -150,6 +154,12 @@ if(NOT MSVC)
   # TBB, but the cross-compiler sysroot does not. Allow unresolved shared-library
   # symbols so the linker doesn't fail — they are satisfied at runtime.
   target_link_options(RuntimeLibrary PRIVATE "-Wl,--allow-shlib-undefined")
+  # Export only the OAAX C API — see cmake/runtime.map for why this is
+  # required for the library to be unloadable at all.
+  target_link_options(RuntimeLibrary PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime.map")
+  set_target_properties(RuntimeLibrary PROPERTIES
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime.map")
 endif()
 
 # === Optimization Flags ===
@@ -175,16 +185,9 @@ else()
   endif()
 endif()
 
-# Enable dispatch-pipeline profiling in debug builds (zero overhead in Release).
-if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-  target_compile_definitions(RuntimeLibrary PUBLIC OAAX_PROFILE=1)
-  message(STATUS "Debug build: OAAX_PROFILE=1 enabled")
-endif()
-
 # === Include Directories ===
 target_include_directories(RuntimeLibrary PUBLIC
   ${INCLUDE_DIR}
-  ${TOOLS_C_UTILITIES_INCLUDE_DIR}
   ${CONCURRENT_QUEUE_DIR}
   ${OPENVINO_INCLUDE_DIR}
 )
@@ -211,7 +214,6 @@ target_link_directories(RuntimeLibrary PUBLIC
 if(MSVC)
   target_link_libraries(RuntimeLibrary PUBLIC
     spdlog::spdlog
-    c_utilities
     openvino
     ws2_32 bcrypt
   )
@@ -234,7 +236,7 @@ else()
     -Wl,--start-group
     openvino
     spdlog::spdlog
-    pthread dl c_utilities stdc++
+    pthread dl stdc++
     -Wl,--end-group
   )
   # Copy only the OpenVINO libs needed at runtime: core, device plugins,
@@ -255,21 +257,3 @@ else()
     VERBATIM
   )
 endif()
-
-# === Test Executables ===
-set(TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../tests/runtime)
-
-foreach(TEST_NAME simple_test yolo_test)
-  add_executable(${TEST_NAME} ${TEST_DIR}/${TEST_NAME}.cpp)
-  target_include_directories(${TEST_NAME} PRIVATE ${INCLUDE_DIR})
-  target_link_directories(${TEST_NAME} PRIVATE ${OPENVINO_LINK_DIR} ${OPENVINO_LIB_DIR} ${OPENVINO_TBB_LIB_DIR})
-  target_link_libraries(${TEST_NAME} PRIVATE RuntimeLibrary)
-  if(NOT MSVC)
-    target_link_options(${TEST_NAME} PRIVATE "-Wl,--allow-shlib-undefined")
-  endif()
-  # Ensure test binary finds the shared libraries in the same directory at runtime
-  set_target_properties(${TEST_NAME} PROPERTIES
-    BUILD_RPATH "$ORIGIN"
-    INSTALL_RPATH "$ORIGIN"
-  )
-endforeach()

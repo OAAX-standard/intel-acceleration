@@ -15,7 +15,7 @@ OAAX implementation for Intel hardware (CPU, GPU, NPU) on x86_64. Two components
 ```
 conversion-toolchain/   ONNX → OpenVINO IR conversion (Docker)
 runtime-library/        C++ shared library for inference (CPU/GPU/NPU)
-tests/                  Conversion tests, YOLO integration tests, runtime benchmarks
+tests/                  Conversion tests, YOLOX integration tests, runtime benchmarks
 scripts/                CI setup helpers
 ```
 
@@ -40,6 +40,11 @@ bash build-runtimes.sh        # set OPENVINO_DIR if not at /opt/intel/openvino/r
 See [`conversion-toolchain/README.md`](conversion-toolchain/README.md) and
 [`runtime-library/README.md`](runtime-library/README.md) for detailed instructions.
 
+> **v2 API:** The runtime now implements the OAAX v2 interface (`oaax_runtime.h`).
+> Key changes: multi-model loading (`runtime_load_models`), request correlation via `Tensors.id`,
+> blocking `runtime_retrieve_output` with timeout, and `runtime_get_info` JSON diagnostics.
+> See [`runtime-library/README.md`](runtime-library/README.md) for the full API reference.
+
 ## Testing
 
 Tests run in two stages. Stage 1 compiles models; Stage 2 benchmarks them.
@@ -49,10 +54,10 @@ Tests run in two stages. Stage 1 compiles models; Stage 2 benchmarks them.
 uv venv && source .venv/bin/activate
 uv sync --extra integration --extra quantization
 
-# Stage 1 — compile YOLO models to FP32/FP16/INT8 IR and run conversion tests
+# Stage 1 — compile YOLOX models to FP32/FP16/INT8 IR and run conversion tests
 python tests/stage1.py
 
-# Stage 2 — benchmark with benchmark_app + yolo_test across all variants and devices
+# Stage 2 — benchmark with benchmark_app + detector_test across all variants and devices
 python tests/stage2.py [--devices CPU,GPU.0] [--duration 10] [--csv results.csv]
 ```
 
@@ -60,41 +65,41 @@ Individual test suites:
 
 ```bash
 pytest tests/test_conversion.py -v             # toolchain unit tests
-pytest tests/test_yolo_integration.py -v       # YOLO IR validation
+pytest tests/test_detector_integration.py -v   # YOLOX IR validation
 pytest tests/test_quantization_accuracy.py -v  # INT8/FP16 accuracy vs FP32 baseline
 pytest tests/test_docker.py -v                 # Docker image tests (image must be built)
 pytest -m slow tests/test_memory.py           # memory leak tests (~30 min)
 ```
 
-## Benchmark results (Intel Core i7-12700K, hint=throughput)
+## Benchmarks
 
-### CPU benchmarks (`benchmark_app`, batch=1)
+Intel Core i7-12700K, CPU, batch=1, `throughput` hint, YOLOX test models. `benchmark_app` runs 10 s per
+configuration; the OAAX runtime numbers come from `detector_test` (300 runs, in-flight depth = the runtime's
+infer-request count). Median of 3 repetitions; spread between repetitions was ≤ 3%.
 
-| Model | Precision | Throughput |
-|-------|-----------|------------|
-| yolo11n | FP32 | ~96 FPS |
-| yolo11n | FP16 | ~94 FPS |
-| yolo11n | INT8 | **~229 FPS** |
-| yolov8n | FP32 | ~81 FPS |
-| yolov8n | FP16 | ~80 FPS |
-| yolo11s | FP32 | ~32 FPS |
-| yolo11s | FP16 | ~32 FPS |
+| Model | Precision | benchmark_app | OAAX runtime | Delta |
+|-------|-----------|--------------|--------------|-------|
+| yolox_nano | FP32 | ~422 FPS | ~395 FPS | -7% |
+| yolox_nano | FP16 | ~429 FPS | ~405 FPS | -6% |
+| yolox_nano | INT8 | **~664 FPS** | **~606 FPS** | -9% |
+| yolox_tiny | FP32 | ~117 FPS | ~115 FPS | -2% |
+| yolox_tiny | FP16 | ~120 FPS | ~119 FPS | -1% |
+| yolox_tiny | INT8 | **~351 FPS** | **~337 FPS** | -4% |
+| yolox_s | FP32 | ~30 FPS | ~29 FPS | -0% |
+| yolox_s | FP16 | ~30 FPS | ~30 FPS | -0% |
+| yolox_s | INT8 | **~92 FPS** | **~91 FPS** | -1% |
 
-> FP32 and FP16 are identical on this CPU — the i7-12700K has no native FP16 ALU;
-> OpenVINO computes FP16 models as FP32 internally. Only INT8 benefits from AVX2/VNNI (~2.5×).
+- FP32 and FP16 perform the same: this CPU has no native FP16 ALU, so OpenVINO computes FP16 as FP32 internally.
+  INT8 is ~3× faster for tiny and s, and ~1.6× for nano.
+- The runtime stays within ~1–9% of `benchmark_app`; the gap grows with model speed, which points to a per-inference
+  cost at the C API boundary (input/output copies) rather than to the inference itself.
+- Keep enough requests in flight: the runtime sizes its infer-request pool from the CPU (18 on this machine) and a
+  caller that submits fewer starves fast models. With only 5 in flight, INT8 nano/tiny reached about half of the
+  numbers above. `detector_test` now defaults to the runtime's request count.
 
-### GPU benchmarks (iGPU UHD 770 + dGPU RTX A4000, `yolo_test` OAAX runtime)
-
-| Model | Precision | GPU.0 (iGPU) | GPU.1 (dGPU) | GPU (MULTI) |
-|-------|-----------|--------------|--------------|-------------|
-| yolov8n | FP32 | ~72 FPS | ~55 FPS | **~117 FPS** |
-| yolov8n | INT8 | ~101 FPS | ~60 FPS | **~152 FPS** |
-| yolo11n | FP32 | ~75 FPS | ~67 FPS | **~130 FPS** |
-| yolo11n | INT8 | ~103 FPS | ~71 FPS | **~156 FPS** |
-
-The OAAX runtime matches `benchmark_app` within ~4% on CPU. The GPU throughput gap vs
-`benchmark_app` (~9–13%) comes from H2D/D2H memory transfers through the C API boundary;
-use the `MULTI` device with `perf_hint=cumulative_throughput` for best aggregate GPU FPS.
+Reproduce with `python tests/stage2.py --devices CPU --duration 10 --runs 300 --csv results.csv` on an otherwise
+idle machine. Multi-GPU hosts should use `device_type=GPU` with `perf_hint=cumulative_throughput`
+(not re-benchmarked with these models).
 
 ## Contributing
 

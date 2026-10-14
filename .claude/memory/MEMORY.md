@@ -4,3 +4,4 @@
 - [intel-acceleration project state](project_intel_acceleration.md) — Architecture, CI artifact packaging, two-stage test workflow, benchmark results
 - [OpenVINO/NNCF compatibility notes](technical_openvino_compatibility.md) — GCC ABI, CMake WIN32 vs MSVC pitfall, Windows DLL copy, RPATH, archive layout
 - [Runtime optimization findings](technical_runtime_optimizations.md) — perf_hint design, buffer pool, memcpy floor, DATA_TYPE_FLOAT16, sem_t dispatch
+- [Windows runtime loading and unload fixes](project_windows_runtime_fixes.md) — Root causes of silent Windows failure, runtime logger/unload fixes, ov::shutdown()/TBB findings, diagnostic tool

@@ -184,7 +184,7 @@ jobs:
           }
 
   integration-tests:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-22.04
     needs: [build-toolchain, build-runtimes-for-ubuntu]
     permissions:
@@ -216,12 +216,12 @@ jobs:
       - name: Download runtime library
         run: |
           mkdir -p runtime-library/build
-          wget -q "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" -O /tmp/library.tar.gz
+          wget -q "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" -O /tmp/library.tar.gz  # check-secrets-ignore: public artifact storage
           tar xzf /tmp/library.tar.gz -C runtime-library/build/
 
       - name: Load toolchain Docker image
         run: |
-          wget -q "https://oaax.nbg1.your-objectstorage.com/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar" -O /tmp/toolchain.tar
+          wget -q "https://oaax.nbg1.your-objectstorage.com/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar" -O /tmp/toolchain.tar  # check-secrets-ignore: public artifact storage
           docker load -i /tmp/toolchain.tar
           rm /tmp/toolchain.tar
 
@@ -246,11 +246,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-log-linux
-          path: runtime-library/build/runtime.log
+          path: tests/runtime/build/runtime.log
           if-no-files-found: warn
 
   integration-tests-windows:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: windows-latest
     needs: [build-runtimes-for-windows-x86_64, integration-tests]
     permissions:
@@ -262,17 +262,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: 'recursive'
-
-      - name: Install OpenVINO
-        shell: pwsh
-        run: |
-          $ovArchive = "openvino_toolkit_windows_2026.1.0.21367.63e31528c62_x86_64.zip"
-          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/windows/$ovArchive"
-          Invoke-WebRequest -Uri $url -OutFile openvino.zip
-          Expand-Archive -Path openvino.zip -DestinationPath C:\intel -Force
-          Remove-Item openvino.zip
-          $ovDir = (Get-ChildItem -Path C:\intel -Filter "openvino_toolkit_*" | Select-Object -First 1).FullName
-          echo "OPENVINO_DIR=$ovDir\runtime" >> $env:GITHUB_ENV
 
       - name: Determine version
         shell: pwsh
@@ -288,7 +277,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path runtime-library\build\Release | Out-Null
-          Invoke-WebRequest -Uri "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Windows/library.tar.gz" -OutFile library.tar.gz
+          Invoke-WebRequest -Uri "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Windows/library.tar.gz" -OutFile library.tar.gz  # check-secrets-ignore: public artifact storage
           tar xzf library.tar.gz -C runtime-library\build\Release\
           Remove-Item library.tar.gz
 
@@ -298,7 +287,7 @@ jobs:
           name: compiled-models
           path: tests/compiled_models
 
-      - name: Stage 2 — run runtime tests
+      - name: Stage 2 — build test binaries and run tests
         run: python tests/stage2.py
 
       - name: Upload runtime log
@@ -306,5 +295,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: runtime-log-windows
-          path: runtime-library/build/Release/runtime.log
+          path: tests/runtime/build/Release/runtime.log
           if-no-files-found: warn

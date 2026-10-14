@@ -7,6 +7,7 @@ class Message:
     def __init__(self):
         self.message: str = ""
         self.data: dict = {}
+        self.timestamp: str = datetime.datetime.now().isoformat(timespec="seconds")
 
     def to_dict(self):
         """Convert the message to a dictionary.
@@ -14,7 +15,7 @@ class Message:
         Returns:
             dict: Message as a dictionary
         """
-        log = {"Message": self.message}
+        log = {"Timestamp": self.timestamp, "Message": self.message}
         if self.data:
             log["Data"] = self.data
         return log
