@@ -11,7 +11,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Send a report to **aassis@networkoptix.com** with:
+Use GitHub's private reporting: open this repository's **Security** tab, choose **Report a vulnerability** and include:
 - A description of the vulnerability and its potential impact
 - Steps to reproduce or a proof-of-concept
 - The component affected (runtime library, conversion toolchain, or both)
