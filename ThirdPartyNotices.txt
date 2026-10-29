@@ -265,6 +265,34 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
+## miniz (vendored)
+
+Source: https://github.com/richgel999/miniz
+Location: runtime-library/deps/miniz/
+License: Public domain (Unlicense, see the end of miniz.c)
+Used by: runtime library (reading the zip package that holds a model)
+
+---
+
+## oneTBB and hwloc (bundled from the OpenVINO package)
+
+Source: https://github.com/oneapi-src/oneTBB, https://github.com/open-mpi/hwloc
+License: oneTBB: Apache License 2.0 (text above); hwloc: BSD 3-Clause License
+Used by: runtime library packages (libtbb*, tbb12.dll, libhwloc.so*): OpenVINO links against them
+         at run time, so the build copies them from the OpenVINO package into the archive.
+
+The copyright notices are those shipped in the OpenVINO package these files come from.
+
+---
+
+## Python packages of the conversion toolchain image
+
+The toolchain Docker image also contains the Python packages pinned in `conversion-toolchain/uv.lock`
+(for example numpy, onnx, pillow, matplotlib, pandas and the other NNCF dependencies), each under
+its own license; see the package metadata inside the image.
+
+---
+
 ## Microsoft Visual C++ Runtime (Windows package only)
 
 Source: https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution

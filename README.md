@@ -24,6 +24,8 @@ scripts/                CI setup helpers
 Pre-built toolchain images and runtime libraries are available in the
 [contributions](https://github.com/oaax-standard/contributions) repository.
 Usage examples are in the [examples](https://github.com/oaax-standard/examples) repository.
+Releases are uploaded to the OAAX bucket by CI only when a `vX.Y.Z` tag is pushed, and a published version is never
+overwritten (see [CONTRIBUTING](CONTRIBUTING.md#releases-and-ci-uploads)).
 
 ## Building from source
 

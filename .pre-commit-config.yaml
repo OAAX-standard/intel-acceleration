@@ -43,6 +43,9 @@ repos:
     rev: v2.12.0
     hooks:
       - id: hadolint-docker
+        # The hook runs the unpinned ghcr.io/hadolint/hadolint image, so a new hadolint release (2.15 added the info
+        # rule DL3066) can fail CI with no change in the repo. Pin the image to the version of `rev` above.
+        entry: ghcr.io/hadolint/hadolint:v2.12.0@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e hadolint
 
   # ── Secret scanning ──────────────────────────────────────────────────────────
   - repo: local

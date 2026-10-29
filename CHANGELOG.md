@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.0.0] - 2026-04-19
+## [2.0.0] - 2026-10-30
 
 ### Runtime Library — OAAX v2 Interface
 
@@ -91,6 +91,11 @@ The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_out
 
 ### CI
 
+- **Release process:** a release is uploaded to the bucket only when a `vX.Y.Z` tag is pushed, after all builds and
+  tests passed, and a published version is never overwritten (`scripts/publish-artifacts.sh`). Pushes to `main` no
+  longer upload; pull requests still upload to `<branch>/` for testing.
+- The integration tests use the build artifacts of the same CI run instead of downloading them from the bucket.
+- Pinned the `hadolint-docker` pre-commit image to the version of the hook.
 - **Windows integration job simplified:** removed the OpenVINO install step from
   `integration-tests-windows`; test binaries now link only against the downloaded
   `RuntimeLibrary.lib` without needing the full OpenVINO SDK on the runner.
@@ -126,7 +131,8 @@ The v1 functions (`runtime_initialization_with_args`, `send_input`, `receive_out
 - The `integration` extra now installs `onnx` instead of `ultralytics`; `torch`/`torchvision` are no longer
   pulled in. The root project's `requires-python` is now `>=3.13`, matching the conversion toolchain
   (the old `>=3.10` made `uv lock` fail as soon as any dependency changed).
-- `ThirdPartyNotices.txt`: removed the ultralytics entry; added YOLOX and COCO.
+- `ThirdPartyNotices.txt`: removed the ultralytics entry; added YOLOX and COCO, and the bundled miniz, oneTBB and
+  hwloc and the toolchain's Python packages.
 
 ---
 

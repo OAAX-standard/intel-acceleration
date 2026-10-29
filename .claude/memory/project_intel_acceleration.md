@@ -11,6 +11,9 @@ Repo: https://github.com/OAAX-standard/intel-acceleration  Branch: `oaax-v2` (OA
 
 ## Artifact packaging (CI, as of 2026-04-11)
 
+Since 2026-10 CI uploads to S3 only on a `vX.Y.Z` tag (`<VERSION>/` written once + `latest/`) or from a PR (`<branch>/`);
+`main` pushes upload nothing, and the tests use the GitHub build artifacts. The S3 paths below are the keys of those uploads.
+
 **Linux** (S3: `runtimes/<branch>/INTEL/x86_64/Ubuntu/library.tar.gz`):
 - `libRuntimeLibrary.so` + all OpenVINO `.so` libs (no unused frontends) + TBB `.so` libs
 - All .so files have `$ORIGIN` RPATH set by `patchelf` in `build-runtimes.sh`
