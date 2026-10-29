@@ -6,13 +6,15 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   pull_request:
     branches:
       - main
 
 jobs:
   build-toolchain:
-    timeout-minutes: 10
+    timeout-minutes: 15
     runs-on: ubuntu-latest
 
     steps:
@@ -21,46 +23,15 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install s3cmd
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -y
-          sudo apt-get install -y s3cmd
-
       - name: Build conversion toolchain image
         run: bash conversion-toolchain/build-toolchain.sh
 
-      - name: Configure s3cmd
-        run: |
-          cat > ~/.s3cfg <<EOF
-          [default]
-          access_key = ${{ secrets.S3_ACCESS_KEY }}
-          secret_key = ${{ secrets.S3_SECRET_KEY }}
-          bucket_location = us-east-1
-          host_base = ${{ secrets.S3_ENDPOINT_URL }}
-          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
-          use_https = True
-          EOF
-
-      - name: Determine version
-        run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            if [ -f VERSION ]; then
-              version=$(cat VERSION)
-            else
-              exit 1
-            fi
-          else
-            version=${{ github.head_ref }}
-          fi
-          echo "version=$version" >> $GITHUB_ENV
-
-      - name: Upload Docker image to S3
-        run: |
-          s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar"
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            s3cmd put "conversion-toolchain/artifacts/oaax-intel-toolchain.tar" "s3://oaax/conversion-toolchain/latest/INTEL/oaax-intel-toolchain.tar"
-          fi
+      - name: Upload toolchain artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: build-toolchain
+          path: conversion-toolchain/artifacts/oaax-intel-toolchain.tar
+          retention-days: 1
 
   build-runtimes-for-ubuntu:
     timeout-minutes: 20
@@ -82,37 +53,12 @@ jobs:
       - name: Cross-compile runtimes
         run: bash runtime-library/build-runtimes.sh
 
-      - name: Configure s3cmd
-        run: |
-          cat > ~/.s3cfg <<EOF
-          [default]
-          access_key = ${{ secrets.S3_ACCESS_KEY }}
-          secret_key = ${{ secrets.S3_SECRET_KEY }}
-          bucket_location = us-east-1
-          host_base = ${{ secrets.S3_ENDPOINT_URL }}
-          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
-          use_https = True
-          EOF
-
-      - name: Determine version
-        run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            if [ -f VERSION ]; then
-              version=$(cat VERSION)
-            else
-              exit 1
-            fi
-          else
-            version=${{ github.head_ref }}
-          fi
-          echo "version=$version" >> $GITHUB_ENV
-
-      - name: Upload runtimes to S3
-        run: |
-          s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz"
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            s3cmd put "runtime-library/artifacts/runtime-library-X86_64.tar.gz" "s3://oaax/runtimes/latest/INTEL/x86_64/Ubuntu/library.tar.gz"
-          fi
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: build-runtime-linux-x86_64
+          path: runtime-library/artifacts/runtime-library-X86_64.tar.gz
+          retention-days: 1
 
   build-runtimes-for-windows-x86_64:
     timeout-minutes: 10
@@ -139,49 +85,12 @@ jobs:
         run: |
           cd runtime-library
           .\build-runtime.bat
-      - name: Determine version
-        id: version
-        shell: pwsh
-        run: |
-            if ("${{ github.ref }}" -eq "refs/heads/main") {
-            if (Test-Path VERSION) {
-              $version = Get-Content VERSION
-            } else {
-              throw "VERSION file missing"
-            }
-            } else {
-            $version = "${{ github.head_ref }}"
-            }
-            echo "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Upload runtimes to Custom S3-Compatible Bucket
-        shell: pwsh
-        run: |
-          $version = $env:version
-          $artifactPath = "runtime-library\artifacts\runtime-library-X86_64-Windows.tar.gz"
-          $targetKey = "runtimes/$version/INTEL/x86_64/Windows/library.tar.gz"
-          $latestTargetKey = "runtimes/latest/INTEL/x86_64/Windows/library.tar.gz"
-
-          $s5cmdUrl = "https://github.com/peak/s5cmd/releases/download/v2.3.0/s5cmd_2.3.0_Windows-64bit.zip"
-          $s5cmdZip = "$env:USERPROFILE\s5cmd.zip"
-          $s5cmdPath = "$env:USERPROFILE\s5cmd"
-          Invoke-WebRequest -Uri $s5cmdUrl -OutFile $s5cmdZip
-          Expand-Archive -Path $s5cmdZip -DestinationPath $s5cmdPath -Force
-          Remove-Item -Path $s5cmdZip
-
-          $env:PATH += ";$s5cmdPath"
-          [Environment]::SetEnvironmentVariable("PATH", $env:PATH, [EnvironmentVariableTarget]::User)
-
-          if (-Not (Test-Path $artifactPath)) {
-            throw "Artifact not found: $artifactPath"
-          }
-
-          Write-Host "Uploading $artifactPath to s3://oaax/$targetKey"
-          $env:AWS_ACCESS_KEY_ID = "${{ secrets.S3_ACCESS_KEY }}"
-          $env:AWS_SECRET_ACCESS_KEY = "${{ secrets.S3_SECRET_KEY }}"
-          s5cmd --endpoint-url "https://${{ secrets.S3_ENDPOINT_URL }}" cp "$artifactPath" "s3://oaax/$targetKey"
-          if ("${{ github.ref }}" -eq "refs/heads/main") {
-            s5cmd --endpoint-url "https://${{ secrets.S3_ENDPOINT_URL }}" cp "$artifactPath" "s3://oaax/$latestTargetKey"
-          }
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: build-runtime-windows-x86_64
+          path: runtime-library\artifacts\runtime-library-X86_64-Windows.tar.gz
+          retention-days: 1
 
   integration-tests:
     timeout-minutes: 60
@@ -204,26 +113,27 @@ jobs:
           echo "OPENVINO_DIR=/opt/intel/openvino/runtime" >> "$GITHUB_ENV"
           echo "CMAKE_BIN=/usr/local/bin/cmake" >> "$GITHUB_ENV"
 
-      - name: Determine version
-        run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            version=$(cat VERSION)
-          else
-            version=${{ github.head_ref }}
-          fi
-          echo "version=$version" >> $GITHUB_ENV
-
       - name: Download runtime library
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: build-runtime-linux-x86_64
+          path: /tmp/runtime
+
+      - name: Extract runtime library
         run: |
           mkdir -p runtime-library/build
-          wget -q "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Ubuntu/library.tar.gz" -O /tmp/library.tar.gz  # check-secrets-ignore: public artifact storage
-          tar xzf /tmp/library.tar.gz -C runtime-library/build/
+          tar xzf /tmp/runtime/runtime-library-X86_64.tar.gz -C runtime-library/build/
+
+      - name: Download toolchain image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: build-toolchain
+          path: /tmp/toolchain
 
       - name: Load toolchain Docker image
         run: |
-          wget -q "https://oaax.nbg1.your-objectstorage.com/conversion-toolchain/${{ env.version }}/INTEL/oaax-intel-toolchain.tar" -O /tmp/toolchain.tar  # check-secrets-ignore: public artifact storage
-          docker load -i /tmp/toolchain.tar
-          rm /tmp/toolchain.tar
+          docker load -i /tmp/toolchain/oaax-intel-toolchain.tar
+          rm -r /tmp/toolchain
 
       - name: Set up Python environment
         run: uv sync --extra integration --extra quantization -q
@@ -263,23 +173,18 @@ jobs:
           fetch-depth: 1
           submodules: 'recursive'
 
-      - name: Determine version
-        shell: pwsh
-        run: |
-          if ("${{ github.ref }}" -eq "refs/heads/main") {
-            $version = Get-Content VERSION
-          } else {
-            $version = "${{ github.head_ref }}"
-          }
-          echo "version=$version" >> $env:GITHUB_ENV
-
       - name: Download Windows runtime
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: build-runtime-windows-x86_64
+          path: runtime-dl
+
+      - name: Extract Windows runtime
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path runtime-library\build\Release | Out-Null
-          Invoke-WebRequest -Uri "https://oaax.nbg1.your-objectstorage.com/runtimes/${{ env.version }}/INTEL/x86_64/Windows/library.tar.gz" -OutFile library.tar.gz  # check-secrets-ignore: public artifact storage
-          tar xzf library.tar.gz -C runtime-library\build\Release\
-          Remove-Item library.tar.gz
+          tar xzf runtime-dl\runtime-library-X86_64-Windows.tar.gz -C runtime-library\build\Release\
+          Remove-Item -Recurse runtime-dl
 
       - name: Download compiled models
         uses: actions/download-artifact@v4
@@ -297,3 +202,53 @@ jobs:
           name: runtime-log-windows
           path: tests/runtime/build/Release/runtime.log
           if-no-files-found: warn
+
+  # ── Publish ─────────────────────────────────────────────────────────────────
+  # Runs after every build and test passed and uploads the bytes that were tested:
+  #   v* tag               -> <VERSION>/ (write once) and latest/, the release
+  #   pull request         -> <branch>/ (overwritten on every run, removed when the PR closes), for testing
+  #   anything else, or a PR without secrets (fork, Dependabot) -> dry run: files checked, keys printed
+
+  publish:
+    name: Publish to the OAAX bucket
+    timeout-minutes: 30
+    runs-on: ubuntu-22.04
+    needs: [integration-tests, integration-tests-windows]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0  # the tag check below needs main's history
+
+      - name: Tag must match VERSION and be on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [ "${TAG#v}" = "$(cat VERSION)" ] || { echo "tag $TAG does not match VERSION $(cat VERSION)"; exit 1; }
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$TAG is not on main, tag a commit of main"; exit 1; }
+
+      - name: Download the build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          pattern: build-*
+          path: artifacts
+
+      - name: Install s3cmd
+        run: sudo apt-get update -y && sudo apt-get install -y s3cmd
+
+      - name: Upload to S3
+        env:
+          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+        # The branch name reaches the script only through the environment (GITHUB_HEAD_REF), never through ${{ }}.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            mode=release name=$(cat VERSION)
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$S3_ACCESS_KEY" ]; then
+            mode=branch name=$GITHUB_HEAD_REF
+          else
+            mode=dry name=$(cat VERSION)
+          fi
+          bash scripts/publish-artifacts.sh "$mode" "$name" artifacts

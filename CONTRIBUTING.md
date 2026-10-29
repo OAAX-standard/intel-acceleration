@@ -111,6 +111,20 @@ Use Doxygen-style comments for any public API additions.
   note it explicitly — the API must remain backwards-compatible.
 - Update `CHANGELOG.md` under an `[Unreleased]` section.
 
+## Releases and CI uploads
+
+CI (`build.yml`) builds the runtimes and the toolchain, tests those exact bytes, then the `publish` job uploads
+them to the OAAX bucket with `scripts/publish-artifacts.sh`:
+
+| Event | Writes |
+| ----- | ------ |
+| `vX.Y.Z` tag (must equal `VERSION`, commit on `main`) | `<VERSION>/`, written once (refused if a key exists), plus `latest/` |
+| Pull request from this repo | `<branch>/`, overwritten on each run, removed when the PR closes |
+| Push to `main`, fork or Dependabot PR | nothing (dry run: files checked, keys printed) |
+
+Branch names that look like a release (`latest`, a leading digit or `v<digit>`) are not uploaded.
+To release: bump `VERSION` and `CHANGELOG.md` on `main`, then push the tag `vX.Y.Z` on that commit.
+
 ## Adding dependencies
 
 - **Python:** add to `pyproject.toml` and document the reason in your PR.

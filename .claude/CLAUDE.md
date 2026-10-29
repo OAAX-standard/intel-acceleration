@@ -195,6 +195,15 @@ CMake requires `-DPLATFORM=X86_64 -DRUNTIME_VERSION=<ver> -DOPENVINO_DIR=<path>`
 | Runtime | C++14/17, OpenVINO C++ API, spdlog, moodycamel::ConcurrentQueue, CMake |
 | Testing | pytest + uv (Python), C++ binaries (runtime) |
 
+### CI / releases
+
+`.github/workflows/build.yml` builds the Linux and Windows runtimes and the toolchain image as GitHub artifacts
+(`build-*`), the integration tests use those artifacts, then `publish` uploads them via `scripts/publish-artifacts.sh`:
+a `vX.Y.Z` tag (must equal `VERSION`, commit on `main`) writes `<VERSION>/` once plus `latest/`; a PR writes
+`<branch>/` (overwritten, removed on PR close by `delete-temporary-artifacts.yml`); `main` pushes upload nothing.
+Branch names that look like a release are refused. oaax-manager pins the sha256 of the published files, so never
+overwrite a published version.
+
 ---
 
 ## Reference Files

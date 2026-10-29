@@ -13,26 +13,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install s3cmd and Python dependencies
+      - name: Install s3cmd
         run: |
           sudo apt-get update
           sudo apt-get install -y s3cmd
 
-      - name: Configure s3cmd
-        run: |
-          cat > ~/.s3cfg <<EOF
-          [default]
-          access_key = ${{ secrets.S3_ACCESS_KEY }}
-          secret_key = ${{ secrets.S3_SECRET_KEY }}
-          bucket_location = us-east-1
-          host_base = ${{ secrets.S3_ENDPOINT_URL }}
-          host_bucket = %(bucket)s.${{ secrets.S3_ENDPOINT_URL }}
-          use_https = True
-          EOF
-
       - name: Delete runtimes and toolchain folders from S3
+        env:
+          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+        # The branch name reaches the shell only through the environment (GITHUB_HEAD_REF), never through ${{ }}.
         run: |
-            version=${{ github.head_ref }}
-            echo "Deleting artifacts for version: ${version}"
-            s3cmd del --recursive "s3://oaax/runtimes/${version}/INTEL/" || echo "Warning: No runtime-library found for version ${version}"
-            s3cmd del --recursive "s3://oaax/conversion-toolchain/${version}/INTEL/" || echo "Warning: No conversion-toolchain found for version ${version}"
+          version="$GITHUB_HEAD_REF"
+          # Never delete anything that could be a release (see scripts/publish-artifacts.sh)
+          if [[ "$version" =~ ^(latest|v?[0-9]) ]]; then echo "Not deleting '${version}': looks like a release"; exit 0; fi
+          s3cmd_flags="--access_key=$S3_ACCESS_KEY --secret_key=$S3_SECRET_KEY --host=$S3_ENDPOINT_URL --host-bucket=%(bucket)s.$S3_ENDPOINT_URL --bucket-location=us-east-1 --ssl"
+          echo "Deleting artifacts for version: ${version}"
+          # shellcheck disable=SC2086
+          s3cmd $s3cmd_flags del --recursive "s3://oaax/runtimes/${version}/INTEL/" || echo "Warning: No runtime-library found for version ${version}"
+          # shellcheck disable=SC2086
+          s3cmd $s3cmd_flags del --recursive "s3://oaax/conversion-toolchain/${version}/INTEL/" || echo "Warning: No conversion-toolchain found for version ${version}"
