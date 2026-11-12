@@ -74,8 +74,8 @@ jobs:
       - name: Install OpenVINO
         shell: pwsh
         run: |
-          $ovArchive = "openvino_toolkit_windows_2026.1.0.21367.63e31528c62_x86_64.zip"
-          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/windows/$ovArchive"
+          $ovArchive = "openvino_toolkit_windows_2026.4.1.22982.07f9c262b05_x86_64.zip"
+          $url = "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.4.1/windows/$ovArchive"
           Invoke-WebRequest -Uri $url -OutFile openvino.zip
           Expand-Archive -Path openvino.zip -DestinationPath C:\intel -Force
           Remove-Item openvino.zip

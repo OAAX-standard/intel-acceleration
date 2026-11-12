@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.1] - 2026-11-12
+
+### Runtime Library
+
+- Runtime built with **OpenVINO 2026.4.1** (`2026.4.1.22982.07f9c262b05`) on Linux and Windows, up from 2026.1.0.
+  OpenVINO 2026.1.0 returns an empty output on the GPU for detection models with a dynamic output after the first
+  inference on an infer request; 2026.4.1 returns the detections on every inference (see issue #35).
+
+---
+
 ## [2.0.0] - 2026-10-30
 
 ### Runtime Library — OAAX v2 Interface
