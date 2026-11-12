@@ -49,8 +49,8 @@ wget "https://cmake.org/files/v3.31/cmake-3.31.7-linux-${host_platform}.sh" \
     ln -fs /opt/cmake-3.31.7/bin/* /usr/local/bin
 
 # Install OpenVINO runtime archive
-OV_ARCHIVE="openvino_toolkit_ubuntu22_2026.1.0.21367.63e31528c62_x86_64.tgz" # check-secrets-ignore: public download URL, no credentials
-wget -q "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.1/linux/${OV_ARCHIVE}" \
+OV_ARCHIVE="openvino_toolkit_ubuntu22_2026.4.1.22982.07f9c262b05_x86_64.tgz" # check-secrets-ignore: public download URL, no credentials
+wget -q "https://storage.openvinotoolkit.org/repositories/openvino/packages/2026.4.1/linux/${OV_ARCHIVE}" \
     -O /tmp/openvino.tgz
 mkdir -p /opt/intel/openvino
 tar -xzf /tmp/openvino.tgz -C /opt/intel/openvino --strip-components=1
