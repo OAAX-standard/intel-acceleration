@@ -4,38 +4,82 @@
 Why this model:
 - a shape that does not hold 4 elements makes the inference itself fail (on any device), which is how a
   request fails on real hardware (e.g. an NPU that rejects a model at run time);
-- its output is dynamic and has a 900-character name, like detectors with the class list in the output name.
+- its output is dynamic and has a 1140-character name, like detectors with the class list in the output name.
+
+The IR is written by hand (it has no weights), so this needs nothing but the standard library and runs
+wherever the tests run.
 
 Usage: python make_robustness_model.py OUT.zip
 """
 
 import sys
-import tempfile
 import zipfile
 from pathlib import Path
 
-import numpy as np
-import openvino as ov
-import openvino.opset13 as ops
-
 LONG_OUTPUT_NAME = "bboxes-format:xyxysc;" + ";".join(f"{i}:class-number-{i}" for i in range(60))
+
+IR_XML = f"""<?xml version="1.0"?>
+<net name="robustness" version="11">
+	<layers>
+		<layer id="0" name="x" type="Parameter" version="opset1">
+			<data shape="1,4" element_type="f32" />
+			<output>
+				<port id="0" precision="FP32" names="x">
+					<dim>1</dim>
+					<dim>4</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="1" name="shape" type="Parameter" version="opset1">
+			<data shape="2" element_type="i64" />
+			<output>
+				<port id="0" precision="I64" names="shape">
+					<dim>2</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="2" name="Reshape_3" type="Reshape" version="opset1">
+			<data special_zero="false" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>4</dim>
+				</port>
+				<port id="1" precision="I64">
+					<dim>2</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32" names="{LONG_OUTPUT_NAME}">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="3" name="Result_4" type="Result" version="opset1" output_names="{LONG_OUTPUT_NAME}">
+			<input>
+				<port id="0" precision="FP32">
+					<dim>-1</dim>
+					<dim>-1</dim>
+				</port>
+			</input>
+		</layer>
+	</layers>
+	<edges>
+		<edge from-layer="0" from-port="0" to-layer="2" to-port="0" />
+		<edge from-layer="1" from-port="0" to-layer="2" to-port="1" />
+		<edge from-layer="2" from-port="2" to-layer="3" to-port="0" />
+	</edges>
+	<rt_info />
+</net>
+"""
 
 
 def build(out_zip: Path) -> None:
-    x = ops.parameter([1, 4], np.float32, name="x")
-    x.output(0).set_names({"x"})
-    shape = ops.parameter([2], np.int64, name="shape")
-    shape.output(0).set_names({"shape"})
-    reshaped = ops.reshape(x, shape, special_zero=False)
-    reshaped.output(0).set_names({LONG_OUTPUT_NAME})
-    model = ov.Model([reshaped], [x, shape], "robustness")
-    with tempfile.TemporaryDirectory() as tmp:
-        xml = Path(tmp) / "model.xml"
-        ov.save_model(model, xml, compress_to_fp16=False)
-        out_zip.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(out_zip, "w") as z:
-            z.write(xml, "model.xml")
-            z.write(xml.with_suffix(".bin"), "model.bin")
+    out_zip.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(out_zip, "w") as z:
+        z.writestr("model.xml", IR_XML)
+        z.writestr("model.bin", b"")  # the model has no constants
 
 
 if __name__ == "__main__":
