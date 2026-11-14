@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [2.0.2] - unreleased
+## [2.0.2] - 2026-11-14
 
 ### Runtime Library — robustness
 
