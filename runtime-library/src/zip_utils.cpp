@@ -58,8 +58,16 @@ std::string extract_zip_model(const std::string &zip_path,
     if (!mz_zip_reader_file_stat(&zip, i, &stat)) continue;
 
     std::string filename = stat.m_filename;
-    std::string out_path =
-        (std::filesystem::path(temp_dir) / filename).string();
+    // Never write outside the temp dir: skip absolute paths and entries that
+    // climb out with "..".
+    std::filesystem::path rel(filename);
+    bool escapes = rel.is_absolute() || rel.has_root_name();
+    for (const auto &part : rel) escapes = escapes || part == "..";
+    if (escapes) continue;
+    std::filesystem::path out_file = std::filesystem::path(temp_dir) / rel;
+    std::error_code dir_ec;
+    std::filesystem::create_directories(out_file.parent_path(), dir_ec);
+    std::string out_path = out_file.string();
 
     if (!mz_zip_reader_extract_to_file(&zip, i, out_path.c_str(), 0)) {
       std::error_code ec;

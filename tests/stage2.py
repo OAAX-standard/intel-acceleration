@@ -89,7 +89,14 @@ def find_benchmark_app() -> Path | None:
     return None
 
 
-TEST_BINARIES = ("simple_test", "detector_test", "multi_model_test", "output_validation_test", "lifecycle_test")
+TEST_BINARIES = (
+    "simple_test",
+    "detector_test",
+    "multi_model_test",
+    "output_validation_test",
+    "lifecycle_test",
+    "robustness_test",
+)
 
 
 def test_binary_path(name: str) -> Path:
@@ -319,6 +326,17 @@ def run_runtime_api_tests() -> tuple[int, int]:
     tiny = COMPILED_DIR / "yolox_tiny" / "FP32" / "yolox_tiny.zip"
     imgsz = str(TEST_MODELS["yolox_nano"]["input_shape"][2])  # nano and tiny share their input size
     tests = [("simple_test", [])]
+    # robustness_test brings its own model (inference fails on demand), so it runs without stage1's models
+    robustness_zip = TEST_BUILD_DIR / "robustness.zip"
+    made = subprocess.run(
+        [sys.executable, str(ROOT / "tests" / "runtime" / "make_robustness_model.py"), str(robustness_zip)],
+        capture_output=True,
+        text=True,
+    )
+    if made.returncode == 0:
+        tests.append(("robustness_test", [str(robustness_zip)]))
+    else:
+        print(f"  robustness_test          FAILED (could not build its model)\n{made.stderr[-600:]}")
     if nano.exists() and tiny.exists():
         tests += [
             ("lifecycle_test", [str(nano), "--imgsz", imgsz]),
@@ -328,7 +346,7 @@ def run_runtime_api_tests() -> tuple[int, int]:
     else:
         print("  yolox_nano/yolox_tiny FP32 not compiled — running simple_test only")
     results = [run_cpp_test(name, args) for name, args in tests]
-    return results.count(True), results.count(False)
+    return results.count(True), results.count(False) + (made.returncode != 0)
 
 
 # ── Formatting ─────────────────────────────────────────────────────────────────

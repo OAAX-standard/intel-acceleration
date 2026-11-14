@@ -186,12 +186,26 @@ if (st != RUNTIME_STATUS_SUCCESS) {
 
 `runtime_get_error()` returns NULL if no error has occurred.
 
+What the runtime does when something goes wrong:
+
+| Situation | Behaviour |
+|---|---|
+| Invalid input (unknown or repeated name, wrong dtype or shape, buffer size that does not match the shape, no data) | `runtime_enqueue_input` returns `RUNTIME_STATUS_INVALID_ARGUMENT`; you keep ownership of the tensors |
+| An input of the model is left out | It is fed zeros (one warning in the log) |
+| The inference fails in the device | No output comes back for that request id. The failure is counted (`failed_requests` in `runtime_get_info()`), `runtime_get_error()` has the reason, and the requests queued behind it still run |
+| A model cannot be loaded | `runtime_load_models` returns an error and loads none of the models; call it again with other models |
+| Tensor names longer than 128 characters | Shortened for the device only; you send and receive the model's own names |
+| `runtime_cleanup` after failed inferences | Always completes; `runtime_init` can follow |
+
+Only the first 5 failed requests per model and every 100th are logged.
+
 ## Diagnostics
 
 ```c
 const char *info = runtime_get_info();
 // Returns a JSON object, e.g.:
-// {"loaded_models":2,"requests_in_flight":3,"backend_version":"2026.1.0-...","active_device":"CPU"}
+// {"loaded_models":2,"requests_in_flight":3,"failed_requests":0,"output_queue_depth":0,
+//  "backend_version":"2026.4.1-...","models":[{"id":0,"effective_device":"CPU","failed_requests":0,...}]}
 ```
 
 ## Troubleshooting
