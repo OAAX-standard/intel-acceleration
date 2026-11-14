@@ -114,6 +114,10 @@ static void deep_free_tensors(Tensors* t) {
 
 struct SlotState {
   Tensors* input{nullptr};
+  // Set once the slot's infer request has been started. A request that never
+  // ran has nothing to wait for at cleanup (and some devices report it as
+  // "not finished" forever).
+  std::atomic<bool> started{false};
 };
 
 struct ModelState {
@@ -385,6 +389,7 @@ static bool dispatch_to_slot(int model_id, int slot_idx, Tensors* input,
     for (size_t idx = 0; idx < given.size(); ++idx)
       if (!given[idx]) req.set_input_tensor(idx, zero_input(m, idx));
     g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
+    s.started = true;
     req.start_async();
     return true;
   } catch (const std::exception& e) {
@@ -760,6 +765,7 @@ static void destroy_models() {
   for (auto* ms : g_models) {
     for (size_t i = 0; i < ms->infer_requests.size(); ++i) {
       ov::InferRequest& req = ms->infer_requests[i];
+      if (!ms->slot_states[i].started) continue;
       bool finished = false;
       try {
         finished = req.wait_for(kStopTimeout);
@@ -1049,7 +1055,7 @@ static void load_one_model(int m_idx, const ModelConfig& mc) {
 
   for (int i = 0; i < n_req; ++i)
     ms->infer_requests.emplace_back(ms->compiled_model.create_infer_request());
-  ms->slot_states.resize(n_req);
+  ms->slot_states = std::vector<SlotState>(n_req);
   for (int i = 0; i < n_req; ++i) ms->free_slots.enqueue(i);
 
   // Set callbacks with captured model id and slot index

@@ -312,6 +312,15 @@ int main(int argc, char** argv) {
     }
     PASS("3 failed loads leave nothing behind; a good model then loads and runs");
 
+    // ── 6. Nothing above may have looked like a hung request to the cleanup ──
+    {
+        std::ifstream log("runtime.log");
+        std::string line;
+        while (std::getline(log, line))
+            ASSERT(line.find("did not stop") == std::string::npos && line.find("Still running") == std::string::npos,
+                   "cleanup took a finished or unused request for a hung one: " + line);
+    }
+
     std::cout << "\n=== All tests passed ===" << std::endl;
     return 0;
 }
