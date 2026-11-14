@@ -60,6 +60,8 @@ python tests/benchmark_batch_sweep.py [--model yolox_nano] [--device CPU] [--bat
 # C++ runtime tests (build after running build-runtimes.sh)
 bash tests/runtime/build-tests.sh
 cd tests/runtime/build && ./simple_test
+uv run python tests/runtime/make_robustness_model.py tests/runtime/build/robustness.zip
+cd tests/runtime/build && ./robustness_test robustness.zip [device]   # failing inferences, invalid inputs, cleanup
 cd tests/runtime/build && ./detector_test <model.zip> [device] [--runs N] [--warmup N] [--perf-hint latency|throughput]
 cd tests/runtime/build && ./multi_model_test <model.zip> [model2.zip]
 ```

@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.0.2] - unreleased
+
+### Runtime Library — robustness
+
+A failed inference used to break the runtime: `runtime_cleanup()` rethrew the request's exception and aborted the host,
+or left the runtime half torn down so that no model could be loaded afterwards. Found on an Intel NPU, where a model
+with a long output name failed every inference.
+
+- **Cleanup always completes.** A request that failed, or that never finishes (cancelled after 30 s), no longer stops
+  `runtime_cleanup()`; a failed `runtime_load_models()` leaves nothing behind and the next call works.
+- **Long tensor names work on every device.** Names longer than 128 characters are shortened for the device only (the
+  NPU driver cannot link a dynamic output to its shape tensor beyond 256 bytes); callers still send and receive the
+  model's own names.
+- **A failed inference no longer stalls the queue.** Requests queued behind it are run, the failure is counted
+  (`failed_requests` in `runtime_get_info()`, total and per model) and kept for `runtime_get_error()`. Only the first
+  5 failures per model and every 100th are logged.
+- **Invalid inputs are refused by `runtime_enqueue_input()`** with `RUNTIME_STATUS_INVALID_ARGUMENT` and a reason:
+  unknown or repeated input name, wrong dtype, wrong shape, buffer size that does not match the shape, missing data.
+  Before, such a request was dropped later with a log line, or read past the end of the buffer.
+- **An input that is left out gets zeros** (with one warning) instead of the freed buffer of the previous request.
+- **No C++ exception crosses the C API**, and none can end an inference or manager thread.
+- `runtime_get_error()` is safe to call while inferences run; `runtime_get_info()` escapes names in its JSON.
+- Model archives: entries with `..` or absolute paths are skipped, and files in sub-folders are extracted.
+
+New test `robustness_test` (with `make_robustness_model.py`, a model whose inference fails on demand); stage 2 runs it.
+
+---
+
 ## [2.0.1] - 2026-11-12
 
 ### Runtime Library

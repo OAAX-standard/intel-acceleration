@@ -1,7 +1,13 @@
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -120,9 +126,20 @@ struct ModelState {
   sem_t input_sem;
   std::thread manager_thread;
   std::atomic<bool> stop{false};
+  // I/O contract as declared in the IR. Tensors are addressed by index, so
+  // these names are only what callers send and receive, never what the device
+  // sees (see shorten_long_tensor_names()).
   std::vector<std::string> input_names;
+  std::vector<ov::element::Type> input_types;
+  std::vector<ov::PartialShape> input_shapes;
+  std::unordered_map<std::string, size_t> input_index_by_name;
   std::vector<std::string> output_names;
-  std::unordered_map<std::string, ov::element::Type> input_type_by_name;
+  std::vector<ov::PartialShape> output_shapes;
+  std::atomic<uint64_t> failed_requests{0};
+  // Stand-ins for inputs a request leaves out (see zero_input()).
+  std::mutex zero_inputs_mutex;
+  std::vector<ov::Tensor> zero_inputs;
+  std::atomic<bool> warned_missing_input{false};
   std::string temp_dir;
   std::string effective_device;
 };
@@ -144,8 +161,21 @@ static moodycamel::ConcurrentQueue<OutputItem> g_output_queue;
 static sem_t g_output_sem;
 
 static std::shared_ptr<spdlog::logger> g_logger;
+// g_last_error is written by inference threads too, hence the mutex.
+// runtime_get_error() returns g_error_buf, a fixed buffer that is never
+// reallocated, so a pointer handed to the caller cannot dangle.
+static std::mutex g_error_mutex;
 static std::string g_last_error;
+static char g_error_buf[2048];
 static std::string g_info_json;
+
+// Failed requests are logged for the first few and then every 100th: a model
+// that fails every inference would otherwise fill the log within seconds.
+static const uint64_t kLoggedFailures = 5;
+// Tensor names longer than this are replaced before compiling.
+static const size_t kMaxDeviceTensorName = 128;
+// How long cleanup waits for one in-flight request before cancelling it.
+static const std::chrono::milliseconds kStopTimeout{30000};
 
 // Global config defaults (can be overridden per-model)
 static int g_log_level = spdlog::level::info;
@@ -187,9 +217,61 @@ static void config_warn_unknown(const Config& cfg,
   }
 }
 
-static void set_error(const std::string& msg) {
+static void store_error(const std::string& msg) {
+  std::lock_guard<std::mutex> lock(g_error_mutex);
   g_last_error = msg;
+}
+
+static void set_error(const std::string& msg) {
+  store_error(msg);
   if (g_logger) g_logger->error("{}", msg);
+}
+
+// Runs the body of an exported function. No C++ exception may cross the C
+// API: the host is C (or another compiler's C++) and would abort.
+template <typename F>
+static RuntimeStatus guarded(const char* function, F&& body) {
+  try {
+    return body();
+  } catch (const std::exception& e) {
+    set_error(std::string(function) + ": " + e.what());
+  } catch (...) {
+    set_error(std::string(function) + ": unknown exception");
+  }
+  return RUNTIME_STATUS_ERROR;
+}
+
+static std::string json_escape(const std::string& in) {
+  std::string out;
+  out.reserve(in.size());
+  for (unsigned char c : in) {
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += (char)c;
+    } else if (c < 0x20) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "\\u%04x", c);
+      out += buf;
+    } else {
+      out += (char)c;
+    }
+  }
+  return out;
+}
+
+// A request that was accepted but produced no output: count it, keep the
+// reason for runtime_get_error() / runtime_get_info(), and log it (rate
+// limited). The caller gets no output for this request id.
+static void note_failed_request(ModelState& m, int slot_idx, int request_id,
+                                const char* stage, const std::string& what) {
+  uint64_t n = ++m.failed_requests;
+  std::string msg = "[model " + std::to_string(m.id) + " slot " +
+                    std::to_string(slot_idx) + "] " + stage +
+                    " failed for request id=" + std::to_string(request_id) +
+                    " (" + std::to_string(n) + " failed so far): " + what;
+  store_error(msg);
+  if (g_logger && (n <= kLoggedFailures || n % 100 == 0))
+    g_logger->error("{}", msg);
 }
 
 // ─── Wait-for-output helper
@@ -209,118 +291,174 @@ static bool wait_for_output(int timeout_ms) {
 }
 
 // ─── Output builder ──────────────────────────────────────────────────────────
+// Returns nullptr when memory runs out; may throw what OpenVINO throws.
 
 static Tensors* build_output(int model_id, int slot_idx, int request_id) {
   ModelState& m = *g_models[model_id];
   ov::InferRequest& req = m.infer_requests[slot_idx];
   int n = (int)m.output_names.size();
 
-  Tensors* out = (Tensors*)malloc(sizeof(Tensors));
+  Tensors* out = (Tensors*)calloc(1, sizeof(Tensors));
   if (!out) return nullptr;
   out->id = request_id;
   out->num_tensors = n;
-  out->tensors =
-      (TensorDescriptor*)malloc((size_t)n * sizeof(TensorDescriptor));
+  // Zero-filled so deep_free_tensors() is safe on a half-built result.
+  out->tensors = (TensorDescriptor*)calloc((size_t)(n > 0 ? n : 1),
+                                           sizeof(TensorDescriptor));
   if (!out->tensors) {
     free(out);
     return nullptr;
   }
 
-  for (int i = 0; i < n; ++i) {
-    ov::Tensor t = req.get_tensor(m.output_names[i]);
-    ov::Shape shape = t.get_shape();
+  try {
+    for (int i = 0; i < n; ++i) {
+      ov::Tensor t = req.get_output_tensor((size_t)i);
+      ov::Shape shape = t.get_shape();
+      size_t bytes = t.get_byte_size();
+      TensorDescriptor& td = out->tensors[i];
 
-    out->tensors[i].name = strdup(m.output_names[i].c_str());
-    out->tensors[i].data_type = map_from_ov_type(t.get_element_type());
-    out->tensors[i].rank = (int)shape.size();
-    out->tensors[i].shape = (int*)malloc(shape.size() * sizeof(int));
-    for (size_t j = 0; j < shape.size(); ++j)
-      out->tensors[i].shape[j] = (int)shape[j];
-    out->tensors[i].data_size = t.get_byte_size();
-    out->tensors[i].data = malloc(t.get_byte_size());
-    memcpy(out->tensors[i].data, t.data(), t.get_byte_size());
+      td.data_type = map_from_ov_type(t.get_element_type());
+      td.rank = (int)shape.size();
+      td.data_size = bytes;
+      td.name = strdup(m.output_names[i].c_str());
+      td.shape = (int*)malloc((shape.empty() ? 1 : shape.size()) * sizeof(int));
+      td.data = malloc(bytes ? bytes : 1);
+      if (!td.name || !td.shape || !td.data) {
+        deep_free_tensors(out);
+        return nullptr;
+      }
+      for (size_t j = 0; j < shape.size(); ++j) td.shape[j] = (int)shape[j];
+      if (bytes) memcpy(td.data, t.data(), bytes);
+    }
+  } catch (...) {
+    deep_free_tensors(out);
+    throw;
   }
   return out;
 }
 
-// ─── Slot dispatcher ─────────────────────────────────────────────────────────
-// Called from any thread (OV callback, manager, or enqueue caller).
-// Takes ownership of `input`; on tensor-setup failure frees it and returns the
-// slot to free_slots so the pipeline stays live.
+// An input the request did not send is fed zeros. It must be set on every
+// request: the slot's infer request otherwise still points at the buffer of
+// the previous request, which has been freed since. Hosts do leave inputs out
+// (a model input they have no value for), so this is not an error.
+static ov::Tensor zero_input(ModelState& m, size_t idx) {
+  std::lock_guard<std::mutex> lock(m.zero_inputs_mutex);
+  if (m.zero_inputs.empty()) m.zero_inputs.resize(m.input_names.size());
+  if (!m.zero_inputs[idx]) {
+    ov::Tensor t(m.input_types[idx], m.input_shapes[idx].to_shape());
+    memset(t.data(), 0, t.get_byte_size());
+    m.zero_inputs[idx] = t;
+  }
+  if (!m.warned_missing_input.exchange(true))
+    g_logger->warn(
+        "[model {}] Input '{}' was not sent with the request; "
+        "zeros are used for inputs that are left out",
+        m.id, m.input_names[idx]);
+  return m.zero_inputs[idx];
+}
 
-static void dispatch_to_slot(int model_id, int slot_idx, Tensors* input) {
+// ─── Slot dispatcher ─────────────────────────────────────────────────────────
+// Called from any thread (OV callback, manager, or enqueue caller). Starts the
+// request and returns true; from then on the slot owns `input`. Returns false
+// with the reason in `error` when the request could not be started: the caller
+// still owns `input` and the slot.
+
+static bool dispatch_to_slot(int model_id, int slot_idx, Tensors* input,
+                             std::string& error) {
   ModelState& m = *g_models[model_id];
   SlotState& s = m.slot_states[slot_idx];
-  s.input = input;
-
   ov::InferRequest& req = m.infer_requests[slot_idx];
+  s.input = input;
   try {
+    std::vector<bool> given(m.input_names.size(), false);
     for (int i = 0; i < input->num_tensors; ++i) {
       TensorDescriptor& td = input->tensors[i];
       ov::Shape shape;
       for (int j = 0; j < td.rank; ++j) shape.push_back((size_t)td.shape[j]);
-      req.set_tensor(td.name,
-                     ov::Tensor(map_to_ov_type(td.data_type), shape, td.data));
+      size_t idx = m.input_index_by_name.at(td.name);
+      given[idx] = true;
+      // Zero-copy: the request reads the caller's buffer, which the slot keeps
+      // alive until the inference completes.
+      req.set_input_tensor(
+          idx, ov::Tensor(map_to_ov_type(td.data_type), shape, td.data));
     }
+    for (size_t idx = 0; idx < given.size(); ++idx)
+      if (!given[idx]) req.set_input_tensor(idx, zero_input(m, idx));
+    g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
+    req.start_async();
+    return true;
   } catch (const std::exception& e) {
-    g_logger->error("[model {} slot {}] Tensor setup failed: {}", model_id,
-                    slot_idx, e.what());
-    deep_free_tensors(input);
-    s.input = nullptr;
-    m.free_slots.enqueue(slot_idx);
-    return;
+    error = e.what();
+  } catch (...) {
+    error = "unknown exception";
   }
+  s.input = nullptr;
+  return false;
+}
 
-  g_logger->debug("[model {} slot {}] start_async()", model_id, slot_idx);
-  req.start_async();
+// Gives a slot that just finished its next queued input, or marks it idle.
+// Inputs that cannot be started are dropped (and counted) so one bad request
+// does not stall the ones queued behind it.
+static void reload_or_release_slot(int model_id, int slot_idx) {
+  ModelState& m = *g_models[model_id];
+  Tensors* next = nullptr;
+  while (!m.stop && m.input_queue.try_dequeue(next)) {
+    g_logger->debug("[model {} slot {}] Input dequeued (input_queue={})",
+                    model_id, slot_idx, m.input_queue.size_approx());
+    std::string error;
+    if (dispatch_to_slot(model_id, slot_idx, next, error)) return;
+    note_failed_request(m, slot_idx, next->id, "Starting the inference", error);
+    deep_free_tensors(next);
+  }
+  m.free_slots.enqueue(slot_idx);
 }
 
 // ─── Inference completion callback ───────────────────────────────────────────
+// Runs on an OpenVINO thread: nothing may be thrown from here, and the slot
+// must always be handed on, whatever happened to the request.
 
 static void on_inference_complete(int model_id, int slot_idx,
-                                  std::exception_ptr ex) {
+                                  std::exception_ptr ex) noexcept {
   ModelState& m = *g_models[model_id];
   SlotState& s = m.slot_states[slot_idx];
   int request_id = s.input ? s.input->id : 0;
+  Tensors* output = nullptr;
 
-  if (ex) {
-    try {
-      std::rethrow_exception(ex);
-    } catch (const std::exception& e) {
-      g_logger->error("[model {} slot {}] Inference error: {}", model_id,
-                      slot_idx, e.what());
-    }
+  try {
+    if (ex) std::rethrow_exception(ex);
+    output = build_output(model_id, slot_idx, request_id);
+    if (!output)
+      note_failed_request(m, slot_idx, request_id, "Copying the output",
+                          "out of memory");
+  } catch (const std::exception& e) {
+    note_failed_request(m, slot_idx, request_id, "Inference", e.what());
+  } catch (...) {
+    note_failed_request(m, slot_idx, request_id, "Inference",
+                        "unknown exception");
+  }
+
+  try {
     deep_free_tensors(s.input);
     s.input = nullptr;
-    m.free_slots.enqueue(slot_idx);
-    return;
-  }
 
-  Tensors* output = build_output(model_id, slot_idx, request_id);
-  deep_free_tensors(s.input);
-  s.input = nullptr;
+    // Hot path: immediately reload this slot if input is waiting — zero GPU
+    // idle. Cold path: slot goes idle; manager will pair it with the next
+    // enqueue call. Also after a failed request, or the inputs queued behind
+    // it would wait for a callback that never comes.
+    reload_or_release_slot(model_id, slot_idx);
 
-  // Hot path: immediately reload this slot if input is waiting — zero GPU idle.
-  // Cold path: slot goes idle; manager will pair it with the next enqueue call.
-  Tensors* next = nullptr;
-  if (!m.stop && m.input_queue.try_dequeue(next)) {
-    g_logger->debug("[model {} slot {}] Input dequeued (input_queue={})",
-                    model_id, slot_idx, m.input_queue.size_approx());
-    dispatch_to_slot(model_id, slot_idx, next);
-  } else {
-    m.free_slots.enqueue(slot_idx);
-  }
-
-  OutputItem out_item{model_id, output};
-
-  if (output && g_output_queue.try_enqueue(std::move(out_item))) {
-    sem_post(&g_output_sem);
-    g_logger->debug("[model {} slot {}] Output enqueued (output_queue={})",
-                    model_id, slot_idx, g_output_queue.size_approx());
-  } else {
-    g_logger->error("[model {} slot {}] Failed to enqueue output — dropping.",
-                    model_id, slot_idx);
-    deep_free_tensors(output);
+    if (!output) return;
+    if (g_output_queue.try_enqueue(OutputItem{model_id, output})) {
+      sem_post(&g_output_sem);
+      g_logger->debug("[model {} slot {}] Output enqueued (output_queue={})",
+                      model_id, slot_idx, g_output_queue.size_approx());
+    } else {
+      deep_free_tensors(output);
+      note_failed_request(m, slot_idx, request_id, "Queueing the output",
+                          "output queue rejected the item");
+    }
+  } catch (...) {
+    // Only an allocation failure in a queue or the logger can end up here.
   }
 }
 
@@ -355,7 +493,17 @@ static void manager_loop(int model_id) {
     g_logger->debug("[model {} slot {}] Input dequeued (input_queue={})",
                     model_id, slot_idx, m.input_queue.size_approx());
 
-    dispatch_to_slot(model_id, slot_idx, input);
+    // Nothing may escape: an exception here would end the process.
+    try {
+      std::string error;
+      if (!dispatch_to_slot(model_id, slot_idx, input, error)) {
+        note_failed_request(m, slot_idx, input->id, "Starting the inference",
+                            error);
+        deep_free_tensors(input);
+        reload_or_release_slot(model_id, slot_idx);
+      }
+    } catch (...) {
+    }
   }
 }
 
@@ -430,7 +578,7 @@ static void log_available_devices() {
 // ─── Public API
 // ───────────────────────────────────────────────────────────────
 
-RuntimeStatus runtime_init(Config config) {
+static RuntimeStatus init_impl(const Config& config) {
   if (g_initialized) {
     // Allow re-init only after cleanup
     set_error(
@@ -586,16 +734,346 @@ RuntimeStatus runtime_init(Config config) {
     g_logger->info("Runtime initialized successfully");
     return RUNTIME_STATUS_SUCCESS;
   } catch (const std::exception& e) {
-    g_last_error = e.what();
-    if (g_logger) g_logger->error("runtime_init failed: {}", g_last_error);
+    set_error(std::string("runtime_init failed: ") + e.what());
+    g_core.reset();
     return RUNTIME_STATUS_ERROR;
   }
 }
 
-RuntimeStatus runtime_load_models(int num_models,
-                                  const ModelConfig* model_configs) {
+RuntimeStatus runtime_init(Config config) {
+  return guarded("runtime_init", [&] { return init_impl(config); });
+}
+
+// ─── Model teardown ──────────────────────────────────────────────────────────
+// Shared by runtime_cleanup() and a failed runtime_load_models(). Must get to
+// the end whatever state the requests are in: a request that failed keeps its
+// exception and rethrows it from wait(), which used to abort the cleanup and
+// leave the runtime half torn down.
+
+static void destroy_models() {
+  for (auto* ms : g_models) {
+    ms->stop = true;
+    sem_post(&ms->input_sem);
+    if (ms->manager_thread.joinable()) ms->manager_thread.join();
+  }
+
+  for (auto* ms : g_models) {
+    for (size_t i = 0; i < ms->infer_requests.size(); ++i) {
+      ov::InferRequest& req = ms->infer_requests[i];
+      bool finished = false;
+      try {
+        finished = req.wait_for(kStopTimeout);
+        if (!finished) {
+          g_logger->warn(
+              "[model {} slot {}] Still running after {} ms — "
+              "cancelling",
+              ms->id, i, kStopTimeout.count());
+          req.cancel();
+          finished = req.wait_for(kStopTimeout);
+        }
+      } catch (const std::exception& e) {
+        // The request already ended, with an error that was reported when it
+        // happened.
+        finished = true;
+        g_logger->debug("[model {} slot {}] Last request had failed: {}",
+                        ms->id, i, e.what());
+      } catch (...) {
+        finished = true;
+      }
+      if (finished) {
+        deep_free_tensors(ms->slot_states[i].input);
+      } else {
+        // The device still reads this input: leaking it is the safe choice.
+        g_logger->error(
+            "[model {} slot {}] Request did not stop; its input "
+            "is leaked",
+            ms->id, i);
+      }
+      ms->slot_states[i].input = nullptr;
+    }
+  }
+
+  for (auto* ms : g_models) {
+    Tensors* t;
+    while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
+    sem_destroy(&ms->input_sem);
+    try {
+      ms->infer_requests.clear();
+    } catch (...) {
+    }
+    cleanup_temp_dir(ms->temp_dir);
+    delete ms;
+  }
+  g_models.clear();
+
+  OutputItem item;
+  while (g_output_queue.try_dequeue(item)) deep_free_tensors(item.tensors);
+}
+
+// Removes the model's temp dir unless release() was called.
+struct TempDirGuard {
+  std::string dir;
+  ~TempDirGuard() { cleanup_temp_dir(dir); }
+  std::string release() {
+    std::string d;
+    d.swap(dir);
+    return d;
+  }
+};
+
+// Device plugins do not all cope with long tensor names: the NPU plugin loses
+// the link between a dynamic output and its shape tensor when the name exceeds
+// the driver's 256-byte limit, and every inference then fails. Models with the
+// class list in the output name (`bboxes-format:xyxysc;0:person;...`) hit that.
+// The runtime addresses tensors by index, so the device does not need the real
+// names: long ones are replaced here, and callers keep using the IR's names.
+static void shorten_long_tensor_names(const std::shared_ptr<ov::Model>& model,
+                                      int m_idx) {
+  // Devices also derive tensor names from the nodes' own names (the node that
+  // produces an output usually carries the output's name), so every long name
+  // in the graph goes, not only those of the model's inputs and outputs.
+  size_t renamed = 0;
+  for (const auto& node : model->get_ordered_ops()) {
+    if (node->get_friendly_name().size() > kMaxDeviceTensorName) {
+      node->set_friendly_name("oaax_node_" + std::to_string(renamed));
+      ++renamed;
+    }
+    for (auto& port : node->outputs()) {
+      bool too_long = false;
+      for (const auto& name : port.get_names())
+        too_long = too_long || name.size() > kMaxDeviceTensorName;
+      if (!too_long) continue;
+      port.set_names({"oaax_tensor_" + std::to_string(renamed)});
+      ++renamed;
+    }
+  }
+  if (renamed)
+    g_logger->info(
+        "[model {}] {} name(s) longer than {} characters were "
+        "shortened for the device; callers keep the model's names",
+        m_idx, renamed, kMaxDeviceTensorName);
+}
+
+// Loads one model and appends it to g_models. Throws on any failure, leaving
+// nothing behind.
+static void load_one_model(int m_idx, const ModelConfig& mc) {
+  if (!mc.file_path)
+    throw std::runtime_error("model_configs[" + std::to_string(m_idx) +
+                             "].file_path is null");
+
+  // Per-model config (inherits global defaults)
+  std::string device = config_get(mc.config, "device_type", g_device_type);
+  std::string hint = config_get(mc.config, "perf_hint", g_perf_hint);
+  std::string cdir = config_get(mc.config, "cache_dir", g_cache_dir);
+  config_warn_unknown(
+      mc.config, {"device_type", "perf_hint", "cache_dir", "num_requests"});
+
+  g_logger->info("[model {}] Loading from: {}", m_idx, mc.file_path);
+
+  TempDirGuard temp;
+  std::string xml_path = extract_zip_model(mc.file_path, temp.dir);
+  if (xml_path.empty())
+    throw std::runtime_error(std::string("Failed to extract model archive: ") +
+                             mc.file_path);
+  g_logger->info("[model {}] Extracted XML: {}", m_idx, xml_path);
+
+  auto model = g_core->read_model(xml_path);
+
+  std::unique_ptr<ModelState> ms(new ModelState());
+  ms->id = m_idx;
+
+  // Record the model I/O contract as declared in the IR. The toolchain bakes
+  // the correct input type into the model (f32 / f16 / u8), so no runtime
+  // PPP conversion is needed — callers must match the IR's input type.
+  for (size_t i = 0; i < model->inputs().size(); ++i) {
+    const auto& inp = model->input(i);
+    const auto& names = inp.get_names();
+    std::string name =
+        names.empty() ? "input_" + std::to_string(i) : inp.get_any_name();
+    ms->input_names.push_back(name);
+    ms->input_types.push_back(inp.get_element_type());
+    ms->input_shapes.push_back(inp.get_partial_shape());
+    ms->input_index_by_name.emplace(name, i);
+    for (const auto& alias : names) ms->input_index_by_name.emplace(alias, i);
+    g_logger->info("[model {}] Input  '{}': {} {}", m_idx, name,
+                   inp.get_element_type().to_string(),
+                   inp.get_partial_shape().to_string());
+  }
+  for (size_t i = 0; i < model->outputs().size(); ++i) {
+    const auto& out = model->output(i);
+    std::string name = out.get_names().empty() ? "output_" + std::to_string(i)
+                                               : out.get_any_name();
+    ms->output_names.push_back(name);
+    ms->output_shapes.push_back(out.get_partial_shape());
+    g_logger->info("[model {}] Output '{}': {} {}", m_idx, name,
+                   out.get_element_type().to_string(),
+                   out.get_partial_shape().to_string());
+  }
+  shorten_long_tensor_names(model, m_idx);
+
+  std::string eff_device = resolve_device(device);
+
+  // AUTO device: OpenVINO starts inference on CPU immediately and
+  // transparently migrates to the best available accelerator in the
+  // background once it finishes loading.
+  if (eff_device.rfind("AUTO", 0) == 0)
+    g_logger->info(
+        "[model {}] AUTO device selected — inference starts on CPU and "
+        "migrates to accelerator in background when ready.",
+        m_idx);
+
+  // For MULTI-device execution the recommended hint is
+  // cumulative_throughput, which distributes requests across all devices
+  // simultaneously. Any other hint applies per-device and leaves aggregate
+  // throughput on the table.
+  if (eff_device.rfind("MULTI:", 0) == 0 && hint != "cumulative_throughput") {
+    g_logger->warn(
+        "[model {}] Device is '{}' but perf_hint is '{}'. Use "
+        "perf_hint=cumulative_throughput with MULTI to maximise aggregate "
+        "throughput across all devices.",
+        m_idx, eff_device, hint);
+  }
+
+  // BATCH pseudo-device: wraps the underlying device and transparently
+  // aggregates concurrent single requests into hardware batches.
+  // Most effective on GPU with batch sizes 4–64; not beneficial on CPU.
+  if (g_auto_batch_size > 0) {
+    if (eff_device == "CPU") {
+      g_logger->warn(
+          "[model {}] auto_batch_size={} ignored — BATCH device is not "
+          "beneficial on CPU.",
+          m_idx, g_auto_batch_size);
+    } else {
+      eff_device =
+          "BATCH:" + eff_device + "(" + std::to_string(g_auto_batch_size) + ")";
+      g_logger->info("[model {}] BATCH device: {}", m_idx, eff_device);
+    }
+  }
+
+  // num_streams: refines GPU parallelism alongside throughput hint.
+  // Recommended value for discrete Intel GPU: 4.
+  int effective_streams = g_num_streams;
+  if (effective_streams > 0 && hint == "latency") {
+    g_logger->warn(
+        "[model {}] num_streams={} has no effect with perf_hint=latency "
+        "(latency hint uses a single stream).",
+        m_idx, effective_streams);
+    effective_streams = 0;
+  }
+
+  auto perf_cfg = build_perf_config(hint, effective_streams);
+
+  // NPU_TURBO raises the NPU clock to its maximum sustained frequency.
+  // Driver-permitting; silently ignored on non-NPU devices or older
+  // drivers.
+  if (g_npu_turbo) {
+    bool is_npu = eff_device == "NPU" || eff_device.rfind("NPU.", 0) == 0;
+    if (is_npu) {
+      perf_cfg["NPU_TURBO"] = std::string("YES");
+      g_logger->info("[model {}] NPU_TURBO=YES injected", m_idx);
+    } else {
+      g_logger->warn("[model {}] npu_turbo=1 ignored — device is '{}', not NPU",
+                     m_idx, eff_device);
+    }
+  }
+
+  g_logger->info("[model {}] Compiling for '{}' (hint={})...", m_idx,
+                 eff_device, hint);
+
+  ov::CompiledModel compiled;
+  try {
+    compiled = g_core->compile_model(model, eff_device, perf_cfg);
+  } catch (const std::exception& e) {
+    std::string err_msg = e.what();
+    bool no_pclmulqdq = err_msg.find("pclmulqdq") != std::string::npos ||
+                        err_msg.find("CRC algorithm") != std::string::npos;
+    if (no_pclmulqdq) {
+      // CPU lacks pclmulqdq (common in VMs); disable cache globally and
+      // retry
+      g_logger->warn("[model {}] CPU lacks pclmulqdq — model cache disabled",
+                     m_idx);
+      g_core->set_property(ov::cache_dir(""));
+      compiled = g_core->compile_model(model, eff_device, perf_cfg);
+    } else if (device != "CPU") {
+      g_logger->warn(
+          "[model {}] Compile on {} failed ({}), falling back to CPU", m_idx,
+          eff_device, e.what());
+      eff_device = "CPU";
+      compiled = g_core->compile_model(model, "CPU", perf_cfg);
+    } else {
+      throw;
+    }
+  }
+
+  // Tensors are addressed by index, which only works if the device kept the
+  // IR's inputs and outputs as they are.
+  if (compiled.inputs().size() != ms->input_names.size() ||
+      compiled.outputs().size() != ms->output_names.size())
+    throw std::runtime_error(
+        "the compiled model does not have the inputs/outputs of the IR");
+
+  int n_req = 1;
+  try {
+    n_req = (int)compiled.get_property(ov::optimal_number_of_infer_requests);
+  } catch (const std::exception& e) {
+    g_logger->warn(
+        "[model {}] Device does not report its optimal number of "
+        "infer requests ({}); using 1",
+        m_idx, e.what());
+  }
+  try {
+    int actual_streams = (int)compiled.get_property(ov::num_streams);
+    g_logger->info("[model {}] Streams: {} ({}), infer requests: {}", m_idx,
+                   actual_streams, effective_streams > 0 ? "user-set" : "auto",
+                   n_req);
+  } catch (...) {
+    // not all devices expose num_streams (e.g. NPU)
+    g_logger->info("[model {}] Optimal infer requests: {}", m_idx, n_req);
+  }
+  int forced_nreq = 0;
+  try {
+    forced_nreq = std::stoi(
+        config_get(mc.config, "num_requests",
+                   g_num_requests > 0 ? std::to_string(g_num_requests) : "0"));
+  } catch (...) {
+  }
+  if (forced_nreq > 0) {
+    g_logger->info("[model {}] num_requests overridden: {} → {}", m_idx, n_req,
+                   forced_nreq);
+    n_req = forced_nreq;
+  }
+  if (n_req < 1) n_req = 1;
+
+  ms->compiled_model = std::move(compiled);
+  ms->effective_device = eff_device;
+
+  for (int i = 0; i < n_req; ++i)
+    ms->infer_requests.emplace_back(ms->compiled_model.create_infer_request());
+  ms->slot_states.resize(n_req);
+  for (int i = 0; i < n_req; ++i) ms->free_slots.enqueue(i);
+
+  // Set callbacks with captured model id and slot index
+  for (int i = 0; i < n_req; ++i) {
+    ms->infer_requests[i].set_callback([m_idx, i](std::exception_ptr ex) {
+      on_inference_complete(m_idx, i, ex);
+    });
+  }
+
+  // From here on destroy_models() owns the model, its temp dir included.
+  g_models.push_back(ms.get());
+  ModelState* loaded = ms.release();
+  loaded->temp_dir = temp.release();
+  sem_init(&loaded->input_sem, 0, 0);
+  loaded->stop = false;
+  loaded->manager_thread = std::thread(manager_loop, m_idx);
+  g_logger->info("[model {}] Ready ({} slots, device={})", m_idx, n_req,
+                 eff_device);
+}
+
+static RuntimeStatus load_models_impl(int num_models,
+                                      const ModelConfig* model_configs) {
   if (!g_initialized) {
-    g_last_error = "runtime_load_models: runtime not initialized";
+    store_error("runtime_load_models: runtime not initialized");
     return RUNTIME_STATUS_NOT_INITIALIZED;
   }
   if (g_models_loaded) {
@@ -608,245 +1086,99 @@ RuntimeStatus runtime_load_models(int num_models,
     return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
 
-  // Load each model; on any failure clean up already-created models
-  for (int m_idx = 0; m_idx < num_models; ++m_idx) {
-    const ModelConfig& mc = model_configs[m_idx];
-    if (!mc.file_path) {
-      set_error("model_configs[" + std::to_string(m_idx) +
-                "].file_path is null");
-      goto fail;
-    }
-
-    try {
-      // Per-model config (inherits global defaults)
-      std::string device = config_get(mc.config, "device_type", g_device_type);
-      std::string hint = config_get(mc.config, "perf_hint", g_perf_hint);
-      std::string cdir = config_get(mc.config, "cache_dir", g_cache_dir);
-      config_warn_unknown(
-          mc.config, {"device_type", "perf_hint", "cache_dir", "num_requests"});
-
-      g_logger->info("[model {}] Loading from: {}", m_idx, mc.file_path);
-
-      std::string temp_dir;
-      std::string xml_path = extract_zip_model(mc.file_path, temp_dir);
-      if (xml_path.empty()) {
-        set_error(std::string("Failed to extract model archive: ") +
-                  mc.file_path);
-        cleanup_temp_dir(temp_dir);
-        goto fail;
-      }
-      g_logger->info("[model {}] Extracted XML: {}", m_idx, xml_path);
-
-      auto model = g_core->read_model(xml_path);
-
-      // Log the model I/O contract as declared in the IR. The toolchain bakes
-      // the correct input type into the model (f32 / f16 / u8), so no runtime
-      // PPP conversion is needed — callers must match the IR's input type.
-      for (size_t i = 0; i < model->inputs().size(); ++i) {
-        const auto& inp = model->input(i);
-        g_logger->info("[model {}] Input  '{}': {} {}", m_idx,
-                       inp.get_any_name(), inp.get_element_type().to_string(),
-                       inp.get_partial_shape().to_string());
-      }
-      for (size_t i = 0; i < model->outputs().size(); ++i) {
-        const auto& out = model->output(i);
-        std::string name;
-        try {
-          name = out.get_any_name();
-        } catch (...) {
-          name = "<unnamed>";
-        }
-        g_logger->info("[model {}] Output '{}': {} {}", m_idx, name,
-                       out.get_element_type().to_string(),
-                       out.get_partial_shape().to_string());
-      }
-
-      std::string eff_device = resolve_device(device);
-
-      // AUTO device: OpenVINO starts inference on CPU immediately and
-      // transparently migrates to the best available accelerator in the
-      // background once it finishes loading.
-      if (eff_device.rfind("AUTO", 0) == 0)
-        g_logger->info(
-            "[model {}] AUTO device selected — inference starts on CPU and "
-            "migrates to accelerator in background when ready.",
-            m_idx);
-
-      // For MULTI-device execution the recommended hint is
-      // cumulative_throughput, which distributes requests across all devices
-      // simultaneously. Any other hint applies per-device and leaves aggregate
-      // throughput on the table.
-      if (eff_device.rfind("MULTI:", 0) == 0 &&
-          hint != "cumulative_throughput") {
-        g_logger->warn(
-            "[model {}] Device is '{}' but perf_hint is '{}'. Use "
-            "perf_hint=cumulative_throughput with MULTI to maximise aggregate "
-            "throughput across all devices.",
-            m_idx, eff_device, hint);
-      }
-
-      // BATCH pseudo-device: wraps the underlying device and transparently
-      // aggregates concurrent single requests into hardware batches.
-      // Most effective on GPU with batch sizes 4–64; not beneficial on CPU.
-      if (g_auto_batch_size > 0) {
-        if (eff_device == "CPU") {
-          g_logger->warn(
-              "[model {}] auto_batch_size={} ignored — BATCH device is not "
-              "beneficial on CPU.",
-              m_idx, g_auto_batch_size);
-        } else {
-          eff_device = "BATCH:" + eff_device + "(" +
-                       std::to_string(g_auto_batch_size) + ")";
-          g_logger->info("[model {}] BATCH device: {}", m_idx, eff_device);
-        }
-      }
-
-      // num_streams: refines GPU parallelism alongside throughput hint.
-      // Recommended value for discrete Intel GPU: 4.
-      int effective_streams = g_num_streams;
-      if (effective_streams > 0 && hint == "latency") {
-        g_logger->warn(
-            "[model {}] num_streams={} has no effect with perf_hint=latency "
-            "(latency hint uses a single stream).",
-            m_idx, effective_streams);
-        effective_streams = 0;
-      }
-
-      auto perf_cfg = build_perf_config(hint, effective_streams);
-
-      // NPU_TURBO raises the NPU clock to its maximum sustained frequency.
-      // Driver-permitting; silently ignored on non-NPU devices or older
-      // drivers.
-      if (g_npu_turbo) {
-        bool is_npu = eff_device == "NPU" || eff_device.rfind("NPU.", 0) == 0;
-        if (is_npu) {
-          perf_cfg["NPU_TURBO"] = std::string("YES");
-          g_logger->info("[model {}] NPU_TURBO=YES injected", m_idx);
-        } else {
-          g_logger->warn(
-              "[model {}] npu_turbo=1 ignored — device is '{}', not NPU", m_idx,
-              eff_device);
-        }
-      }
-
-      g_logger->info("[model {}] Compiling for '{}' (hint={})...", m_idx,
-                     eff_device, hint);
-
-      ov::CompiledModel compiled;
+  // On any failure the models loaded so far are removed again: it is all or
+  // nothing, and the runtime stays usable for another runtime_load_models().
+  try {
+    for (int m_idx = 0; m_idx < num_models; ++m_idx) {
       try {
-        compiled = g_core->compile_model(model, eff_device, perf_cfg);
+        load_one_model(m_idx, model_configs[m_idx]);
       } catch (const std::exception& e) {
-        std::string err_msg = e.what();
-        bool no_pclmulqdq = err_msg.find("pclmulqdq") != std::string::npos ||
-                            err_msg.find("CRC algorithm") != std::string::npos;
-        if (no_pclmulqdq) {
-          // CPU lacks pclmulqdq (common in VMs); disable cache globally and
-          // retry
-          g_logger->warn(
-              "[model {}] CPU lacks pclmulqdq — model cache disabled", m_idx);
-          g_core->set_property(ov::cache_dir(""));
-          compiled = g_core->compile_model(model, eff_device, perf_cfg);
-        } else if (device != "CPU") {
-          g_logger->warn(
-              "[model {}] Compile on {} failed ({}), falling back to CPU",
-              m_idx, eff_device, e.what());
-          eff_device = "CPU";
-          compiled = g_core->compile_model(model, "CPU", perf_cfg);
-        } else {
-          throw;
-        }
+        throw std::runtime_error("Failed to load model " +
+                                 std::to_string(m_idx) + ": " + e.what());
       }
-
-      int n_req = compiled.get_property(ov::optimal_number_of_infer_requests);
-      try {
-        int actual_streams = (int)compiled.get_property(ov::num_streams);
-        g_logger->info("[model {}] Streams: {} ({}), infer requests: {}", m_idx,
-                       actual_streams,
-                       effective_streams > 0 ? "user-set" : "auto", n_req);
-      } catch (...) {
-        // not all devices expose num_streams (e.g. NPU)
-        g_logger->info("[model {}] Optimal infer requests: {}", m_idx, n_req);
-      }
-      int forced_nreq = 0;
-      try {
-        forced_nreq = std::stoi(config_get(
-            mc.config, "num_requests",
-            g_num_requests > 0 ? std::to_string(g_num_requests) : "0"));
-      } catch (...) {
-      }
-      if (forced_nreq > 0) {
-        g_logger->info("[model {}] num_requests overridden: {} → {}", m_idx,
-                       n_req, forced_nreq);
-        n_req = forced_nreq;
-      }
-
-      ModelState* ms = new ModelState();
-      ms->id = m_idx;
-      ms->compiled_model = std::move(compiled);
-      ms->effective_device = eff_device;
-      ms->temp_dir = temp_dir;
-
-      for (const auto& inp : ms->compiled_model.inputs()) {
-        ms->input_names.push_back(inp.get_any_name());
-        ms->input_type_by_name[inp.get_any_name()] = inp.get_element_type();
-      }
-      for (const auto& out : ms->compiled_model.outputs())
-        ms->output_names.push_back(out.get_any_name());
-
-      for (int i = 0; i < n_req; ++i)
-        ms->infer_requests.emplace_back(
-            ms->compiled_model.create_infer_request());
-
-      ms->slot_states.resize(n_req);
-      sem_init(&ms->input_sem, 0, 0);
-
-      for (int i = 0; i < n_req; ++i) ms->free_slots.enqueue(i);
-
-      // Set callbacks with captured model id and slot index
-      for (int i = 0; i < n_req; ++i) {
-        ms->infer_requests[i].set_callback([m_idx, i](std::exception_ptr ex) {
-          on_inference_complete(m_idx, i, ex);
-        });
-      }
-
-      g_models.push_back(ms);
-      ms->stop = false;
-      ms->manager_thread = std::thread(manager_loop, m_idx);
-      g_logger->info("[model {}] Ready ({} slots, device={})", m_idx, n_req,
-                     eff_device);
-
-    } catch (const std::exception& e) {
-      set_error(std::string("Failed to load model ") + std::to_string(m_idx) +
-                ": " + e.what());
-      goto fail;
     }
+  } catch (const std::exception& e) {
+    std::string reason = e.what();
+    destroy_models();
+    set_error(reason);
+    return RUNTIME_STATUS_ERROR;
+  } catch (...) {
+    destroy_models();
+    set_error("Failed to load the models: unknown exception");
+    return RUNTIME_STATUS_ERROR;
   }
 
   g_models_loaded = true;
   g_logger->info("{} model(s) loaded and ready", num_models);
   return RUNTIME_STATUS_SUCCESS;
-
-fail:
-  // Stop and clean up all models created so far
-  for (auto* ms : g_models) {
-    ms->stop = true;
-    sem_post(&ms->input_sem);
-    if (ms->manager_thread.joinable()) ms->manager_thread.join();
-    for (auto& req : ms->infer_requests) req.wait();
-    Tensors* t;
-    while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
-    sem_destroy(&ms->input_sem);
-    cleanup_temp_dir(ms->temp_dir);
-    delete ms;
-  }
-  g_models.clear();
-  // Drain any stray output items (sem_destroy is handled by runtime_cleanup)
-  OutputItem item;
-  while (g_output_queue.try_dequeue(item)) deep_free_tensors(item.tensors);
-  return RUNTIME_STATUS_ERROR;
 }
 
-RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
+RuntimeStatus runtime_load_models(int num_models,
+                                  const ModelConfig* model_configs) {
+  return guarded("runtime_load_models",
+                 [&] { return load_models_impl(num_models, model_configs); });
+}
+
+// Checks a request against the model before it is accepted, so the caller gets
+// the reason right away. Without this a bad request was only found out when its
+// turn came: it was dropped with a log line and the caller waited for an output
+// that never arrived. Also keeps a too-small buffer from being read past its
+// end. Returns an empty string when the request is valid.
+static std::string validate_input(const ModelState& m, const Tensors* in) {
+  if (in->num_tensors < 0 || (in->num_tensors > 0 && !in->tensors))
+    return "invalid tensor list";
+  std::vector<bool> seen(m.input_names.size(), false);
+  for (int i = 0; i < in->num_tensors; ++i) {
+    const TensorDescriptor& td = in->tensors[i];
+    if (!td.name) return "input tensor " + std::to_string(i) + " has no name";
+    std::string name = td.name;
+    auto it = m.input_index_by_name.find(name);
+    if (it == m.input_index_by_name.end())
+      return "the model has no input named '" + name + "'";
+    size_t idx = it->second;
+    if (seen[idx]) return "input '" + name + "' is given twice";
+    seen[idx] = true;
+
+    ov::element::Type actual;
+    try {
+      actual = map_to_ov_type(td.data_type);
+    } catch (...) {
+      return "unsupported tensor dtype for '" + name + "'";
+    }
+    if (actual != m.input_types[idx])
+      return "dtype mismatch for input '" + name + "': model expects " +
+             m.input_types[idx].to_string() + " but caller sent " +
+             actual.to_string();
+
+    if (td.rank < 0 || (td.rank > 0 && !td.shape))
+      return "input '" + name + "' has an invalid shape";
+    ov::Shape shape;
+    for (int j = 0; j < td.rank; ++j) {
+      if (td.shape[j] < 0)
+        return "input '" + name + "' has a negative dimension";
+      shape.push_back((size_t)td.shape[j]);
+    }
+    if (!m.input_shapes[idx].compatible(ov::PartialShape(shape)))
+      return "shape mismatch for input '" + name + "': model expects " +
+             m.input_shapes[idx].to_string() + " but caller sent " +
+             ov::PartialShape(shape).to_string();
+
+    size_t expected = ov::shape_size(shape) * actual.size();
+    if (td.data_size != expected)
+      return "input '" + name + "' has " + std::to_string(td.data_size) +
+             " bytes but its shape and dtype need " + std::to_string(expected);
+    if (expected > 0 && !td.data) return "input '" + name + "' has no data";
+  }
+  // Inputs that are left out get zeros (see zero_input()), which needs a
+  // known size.
+  for (size_t idx = 0; idx < seen.size(); ++idx)
+    if (!seen[idx] && m.input_shapes[idx].is_dynamic())
+      return "input '" + m.input_names[idx] +
+             "' is missing and has no fixed shape to fill in";
+  return "";
+}
+
+static RuntimeStatus enqueue_impl(int model_id, Tensors* input_tensors) {
   if (!g_initialized) return RUNTIME_STATUS_NOT_INITIALIZED;
   if (!g_models_loaded) return RUNTIME_STATUS_MODEL_NOT_LOADED;
   if (model_id < 0 || model_id >= (int)g_models.size())
@@ -858,26 +1190,10 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
 
   ModelState& m = *g_models[model_id];
 
-  // Validate input dtypes against the compiled model's expected types.
-  for (int i = 0; i < input_tensors->num_tensors; ++i) {
-    const TensorDescriptor& td = input_tensors->tensors[i];
-    if (!td.name) continue;
-    auto it = m.input_type_by_name.find(std::string(td.name));
-    if (it == m.input_type_by_name.end()) continue;
-    try {
-      ov::element::Type actual = map_to_ov_type(td.data_type);
-      if (actual != it->second) {
-        set_error("runtime_enqueue_input: dtype mismatch for input '" +
-                  std::string(td.name) + "': model expects " +
-                  it->second.to_string() + " but caller sent " +
-                  actual.to_string());
-        return RUNTIME_STATUS_INVALID_ARGUMENT;
-      }
-    } catch (...) {
-      set_error("runtime_enqueue_input: unsupported tensor dtype for '" +
-                std::string(td.name) + "'");
-      return RUNTIME_STATUS_INVALID_ARGUMENT;
-    }
+  std::string problem = validate_input(m, input_tensors);
+  if (!problem.empty()) {
+    set_error("runtime_enqueue_input: " + problem);
+    return RUNTIME_STATUS_INVALID_ARGUMENT;
   }
 
   if (g_max_queue_size > 0) {
@@ -902,7 +1218,14 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   // Fast path: an idle slot is available — dispatch directly, no thread hop.
   int idle_slot = -1;
   if (m.free_slots.try_dequeue(idle_slot)) {
-    dispatch_to_slot(model_id, idle_slot, input_tensors);
+    std::string error;
+    if (!dispatch_to_slot(model_id, idle_slot, input_tensors, error)) {
+      // Nothing was started: the caller keeps the tensors, like for any other
+      // rejected input.
+      m.free_slots.enqueue(idle_slot);
+      set_error("runtime_enqueue_input: " + error);
+      return RUNTIME_STATUS_ERROR;
+    }
     g_logger->trace("[enqueue model={} id={}] fast path (direct dispatch)",
                     model_id, input_tensors->id);
     return RUNTIME_STATUS_SUCCESS;
@@ -922,8 +1245,13 @@ RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
   return RUNTIME_STATUS_SUCCESS;
 }
 
-RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
-                                      int timeout_ms) {
+RuntimeStatus runtime_enqueue_input(int model_id, Tensors* input_tensors) {
+  return guarded("runtime_enqueue_input",
+                 [&] { return enqueue_impl(model_id, input_tensors); });
+}
+
+static RuntimeStatus retrieve_impl(int* model_id, Tensors** output_tensors,
+                                   int timeout_ms) {
   if (!g_initialized) return RUNTIME_STATUS_NOT_INITIALIZED;
   if (!g_models_loaded) return RUNTIME_STATUS_MODEL_NOT_LOADED;
   if (!model_id || !output_tensors) {
@@ -964,33 +1292,27 @@ RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
   return RUNTIME_STATUS_SUCCESS;
 }
 
+RuntimeStatus runtime_retrieve_output(int* model_id, Tensors** output_tensors,
+                                      int timeout_ms) {
+  return guarded("runtime_retrieve_output", [&] {
+    return retrieve_impl(model_id, output_tensors, timeout_ms);
+  });
+}
+
 RuntimeStatus runtime_cleanup(void) {
   if (!g_initialized) return RUNTIME_STATUS_SUCCESS;  // idempotent
 
-  g_logger->info("Cleaning up runtime...");
-
-  // Stop all manager threads and wait for in-flight requests
-  for (auto* ms : g_models) {
-    ms->stop = true;
-    sem_post(&ms->input_sem);
-    if (ms->manager_thread.joinable()) ms->manager_thread.join();
-    for (auto& req : ms->infer_requests) req.wait();
-  }
-
-  // Drain input queues and destroy per-model resources
-  for (auto* ms : g_models) {
-    Tensors* t;
-    while (ms->input_queue.try_dequeue(t)) deep_free_tensors(t);
-    sem_destroy(&ms->input_sem);
-    ms->infer_requests.clear();
-    cleanup_temp_dir(ms->temp_dir);
-    delete ms;
+  // Every step runs whatever the previous one did: a cleanup that stops half
+  // way leaves a runtime that can neither be used nor initialized again.
+  if (g_logger) g_logger->info("Cleaning up runtime...");
+  try {
+    destroy_models();
+  } catch (const std::exception& e) {
+    if (g_logger) g_logger->error("Cleanup of the models failed: {}", e.what());
+  } catch (...) {
+    if (g_logger) g_logger->error("Cleanup of the models failed");
   }
   g_models.clear();
-
-  // Drain global output queue
-  OutputItem item;
-  while (g_output_queue.try_dequeue(item)) deep_free_tensors(item.tensors);
   sem_destroy(&g_output_sem);
 
   // Deliberately NOT calling ov::shutdown() here: per its own doc comment it
@@ -1003,13 +1325,21 @@ RuntimeStatus runtime_cleanup(void) {
   // unloading this library. Calling ov::shutdown() here raced OpenVINO's
   // fresh-Core creation on the next runtime_init() against TBB's own
   // internal NUMA/topology teardown, crashing inside tbbbind.
-  g_core.reset();
+  try {
+    g_core.reset();
+  } catch (...) {
+  }
   g_initialized = false;
   g_models_loaded = false;
-  g_last_error.clear();
+  store_error("");
 
-  g_logger->info("Runtime cleanup complete.");
-  destroy_logger(g_logger);
+  try {
+    if (g_logger) {
+      g_logger->info("Runtime cleanup complete.");
+      destroy_logger(g_logger);
+    }
+  } catch (...) {
+  }
   g_logger = nullptr;
   // Join the async logging thread last — after this, no thread whose code
   // lives in this library is left running, so the host can FreeLibrary()
@@ -1020,19 +1350,25 @@ RuntimeStatus runtime_cleanup(void) {
 }
 
 const char* runtime_get_error(void) {
-  return g_last_error.empty() ? nullptr : g_last_error.c_str();
+  std::lock_guard<std::mutex> lock(g_error_mutex);
+  if (g_last_error.empty()) return nullptr;
+  snprintf(g_error_buf, sizeof(g_error_buf), "%s", g_last_error.c_str());
+  return g_error_buf;
 }
 
 const char* runtime_get_version(void) { return RUNTIME_VERSION; }
 
 const char* runtime_get_name(void) { return "OAAX Intel"; }
 
-const char* runtime_get_info(void) {
+static const char* get_info_impl() {
   if (!g_initialized) return nullptr;
 
   int in_flight = 0;
-  for (const auto* ms : g_models)
+  uint64_t failed = 0;
+  for (const auto* ms : g_models) {
     in_flight += (int)ms->input_queue.size_approx();
+    failed += ms->failed_requests.load();
+  }
 
   std::string bv;
   try {
@@ -1047,7 +1383,7 @@ const char* runtime_get_info(void) {
     auto devs = g_core->get_available_devices();
     for (size_t i = 0; i < devs.size(); ++i) {
       if (i) devices_json += ",";
-      devices_json += "\"" + devs[i] + "\"";
+      devices_json += "\"" + json_escape(devs[i]) + "\"";
     }
   } catch (...) {
   }
@@ -1070,7 +1406,11 @@ const char* runtime_get_info(void) {
     if (i) models_json += ",";
     models_json += "{";
     models_json += "\"id\":" + std::to_string(ms->id) + ",";
-    models_json += "\"effective_device\":\"" + ms->effective_device + "\",";
+    models_json +=
+        "\"effective_device\":\"" + json_escape(ms->effective_device) + "\",";
+    models_json +=
+        "\"failed_requests\":" + std::to_string(ms->failed_requests.load()) +
+        ",";
     models_json +=
         "\"num_infer_requests\":" + std::to_string(ms->infer_requests.size()) +
         ",";
@@ -1082,17 +1422,10 @@ const char* runtime_get_info(void) {
     for (size_t j = 0; j < ms->input_names.size(); ++j) {
       if (j) inputs_json += ",";
       const std::string& name = ms->input_names[j];
-      auto dtype_it = ms->input_type_by_name.find(name);
-      std::string dtype = dtype_it != ms->input_type_by_name.end()
-                              ? dtype_it->second.get_type_name()
-                              : "unknown";
-      std::string shape = "[]";
-      try {
-        shape = shape_json(ms->compiled_model.input(j).get_partial_shape());
-      } catch (...) {
-      }
-      inputs_json += "{\"name\":\"" + name + "\",\"dtype\":\"" + dtype +
-                     "\",\"shape\":" + shape + "}";
+      std::string dtype = ms->input_types[j].get_type_name();
+      std::string shape = shape_json(ms->input_shapes[j]);
+      inputs_json += "{\"name\":\"" + json_escape(name) + "\",\"dtype\":\"" +
+                     dtype + "\",\"shape\":" + shape + "}";
     }
     inputs_json += "]";
     models_json += "\"inputs\":" + inputs_json + ",";
@@ -1101,13 +1434,9 @@ const char* runtime_get_info(void) {
     std::string outputs_json = "[";
     for (size_t j = 0; j < ms->output_names.size(); ++j) {
       if (j) outputs_json += ",";
-      std::string shape = "[]";
-      try {
-        shape = shape_json(ms->compiled_model.output(j).get_partial_shape());
-      } catch (...) {
-      }
-      outputs_json +=
-          "{\"name\":\"" + ms->output_names[j] + "\",\"shape\":" + shape + "}";
+      std::string shape = shape_json(ms->output_shapes[j]);
+      outputs_json += "{\"name\":\"" + json_escape(ms->output_names[j]) +
+                      "\",\"shape\":" + shape + "}";
     }
     outputs_json += "]";
     models_json += "\"outputs\":" + outputs_json;
@@ -1119,10 +1448,11 @@ const char* runtime_get_info(void) {
   g_info_json = "{";
   g_info_json += "\"loaded_models\":" + std::to_string(g_models.size()) + ",";
   g_info_json += "\"requests_in_flight\":" + std::to_string(in_flight) + ",";
+  g_info_json += "\"failed_requests\":" + std::to_string(failed) + ",";
   g_info_json +=
       "\"output_queue_depth\":" + std::to_string(g_output_queue.size_approx()) +
       ",";
-  g_info_json += "\"backend_version\":\"" + bv + "\",";
+  g_info_json += "\"backend_version\":\"" + json_escape(bv) + "\",";
   g_info_json += "\"perf_hint\":\"" + g_perf_hint + "\",";
   g_info_json += "\"max_queue_size\":" + std::to_string(g_max_queue_size) + ",";
   g_info_json += "\"available_devices\":" + devices_json + ",";
@@ -1130,4 +1460,12 @@ const char* runtime_get_info(void) {
   g_info_json += "}";
 
   return g_info_json.c_str();
+}
+
+const char* runtime_get_info(void) {
+  try {
+    return get_info_impl();
+  } catch (...) {
+    return nullptr;
+  }
 }
